@@ -3,7 +3,7 @@
 import { useState } from "react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
-import { Button } from "@/components/ui/button";
+import { ShinyButton } from "@/components/ui/shiny-button";
 import { Textarea } from "@/components/ui/textarea";
 import { InputOTP, InputOTPGroup, InputOTPSlot } from "@/components/ui/input-otp";
 import {
@@ -106,13 +106,9 @@ export function WaitlistForm() {
               />
             </div>
 
-            <Button
-              type="submit"
-              disabled={loading}
-              className="h-11 w-full bg-primary font-bold text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
-            >
+            <ShinyButton type="submit" disabled={loading} className="w-full justify-center">
               {loading ? "Submitting..." : "Request Early Access"}
-            </Button>
+            </ShinyButton>
 
             <p className="text-center text-xs text-[#2a2a2a]">
               No spam. Early access to the testnet pipeline builder.

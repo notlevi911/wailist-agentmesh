@@ -1,7 +1,7 @@
 "use client";
 
 import { InfiniteGrid } from "@/components/ui/infinite-grid";
-import { TextScramble } from "@/components/ui/text-scramble";
+import { AnimatedShinyScramble } from "@/components/ui/animated-shiny-scramble";
 import { ShinyButton } from "@/components/ui/shiny-button";
 
 export function Hero() {
@@ -26,21 +26,15 @@ export function Hero() {
 
         {/* Heading */}
         <h1
-          className="mb-4 text-6xl font-bold text-foreground md:text-7xl lg:text-8xl"
+          className="mb-4 text-6xl font-bold md:text-7xl lg:text-8xl"
           style={{ letterSpacing: "-2px" }}
         >
-          Agent
-          <TextScramble
-            text="Mesh"
+          <AnimatedShinyScramble
+            text="AgentMesh"
             autoPlay
-            delay={600}
-            className="inline-block"
-            style={{
-              background: "linear-gradient(135deg, #6b21a8 0%, #9333ea 45%, #7c3aed 100%)",
-              WebkitBackgroundClip: "text",
-              WebkitTextFillColor: "transparent",
-              backgroundClip: "text",
-            }}
+            delay={400}
+            gradientColors="linear-gradient(90deg, #ffffff 0%, #f5f0ff 25%, #ffffff 50%, #ede9fe 75%, #ffffff 100%)"
+            gradientDuration={3}
           />
         </h1>
 

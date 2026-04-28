@@ -6,9 +6,11 @@ interface ShinyButtonProps {
   children: React.ReactNode;
   onClick?: () => void;
   className?: string;
+  type?: "button" | "submit" | "reset";
+  disabled?: boolean;
 }
 
-export function ShinyButton({ children, onClick, className = "" }: ShinyButtonProps) {
+export function ShinyButton({ children, onClick, className = "", type = "button", disabled = false }: ShinyButtonProps) {
   return (
     <>
       <style>{`
@@ -167,7 +169,7 @@ export function ShinyButton({ children, onClick, className = "" }: ShinyButtonPr
         }
       `}</style>
 
-      <button className={`shiny-cta ${className}`} onClick={onClick}>
+      <button className={`shiny-cta ${className}`} onClick={onClick} type={type} disabled={disabled} style={disabled ? { opacity: 0.5, pointerEvents: "none" } : undefined}>
         <span>{children}</span>
       </button>
     </>
