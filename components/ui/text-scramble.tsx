@@ -26,7 +26,7 @@ export function TextScramble({
     if (isScrambling.current) return;
     isScrambling.current = true;
     frameRef.current = 0;
-    const duration = text.length * 3;
+    const duration = text.length * 6;
 
     if (intervalRef.current) clearInterval(intervalRef.current);
 
@@ -51,7 +51,7 @@ export function TextScramble({
         setDisplayText(text);
         isScrambling.current = false;
       }
-    }, 30);
+    }, 50);
   }, [text]);
 
   useEffect(() => {

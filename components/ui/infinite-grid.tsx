@@ -29,7 +29,7 @@ const GridPattern = ({
         <path
           d="M 40 0 L 0 0 0 40"
           fill="none"
-          stroke="#2a2a2a"
+          stroke="#4c1d95"
           strokeWidth="1"
         />
       </motion.pattern>
@@ -69,11 +69,11 @@ export function InfiniteGrid({ children, className }: InfiniteGridProps) {
       onMouseMove={handleMouseMove}
       className={cn("relative w-full overflow-hidden bg-background", className)}
     >
-      <div className="absolute inset-0 z-0 opacity-[0.035]">
+      <div className="absolute inset-0 z-0 opacity-[0.22]">
         <GridPattern offsetX={gridOffsetX} offsetY={gridOffsetY} />
       </div>
       <motion.div
-        className="absolute inset-0 z-0 opacity-25"
+        className="absolute inset-0 z-0 opacity-70"
         style={{ maskImage, WebkitMaskImage: maskImage }}
       >
         <GridPattern offsetX={gridOffsetX} offsetY={gridOffsetY} />

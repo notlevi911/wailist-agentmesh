@@ -2,7 +2,7 @@
 
 import { InfiniteGrid } from "@/components/ui/infinite-grid";
 import { TextScramble } from "@/components/ui/text-scramble";
-import { Button } from "@/components/ui/button";
+import { ShinyButton } from "@/components/ui/shiny-button";
 
 export function Hero() {
   const scrollToWaitlist = () => {
@@ -44,12 +44,9 @@ export function Hero() {
         </p>
 
         {/* CTA */}
-        <Button
-          onClick={scrollToWaitlist}
-          className="h-11 bg-primary px-8 text-sm font-bold text-primary-foreground hover:bg-primary/90"
-        >
+        <ShinyButton onClick={scrollToWaitlist}>
           Get Early Access
-        </Button>
+        </ShinyButton>
       </div>
     </InfiniteGrid>
   );
