@@ -38,7 +38,7 @@ export function ShinyInputWrapper({ children, className = "" }: ShinyInputWrappe
           animation: input-gradient-spin 3s linear infinite;
         }
 
-        [data-slot="input-otp-slot"][data-active] {
+        [data-slot="input-otp-slot"][data-active="true"] {
           border: 1px solid transparent !important;
           background:
             linear-gradient(#1a1a1a, #1a1a1a) padding-box,
