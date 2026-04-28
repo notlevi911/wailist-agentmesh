@@ -4,6 +4,7 @@ import { useState } from "react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { ShinyButton } from "@/components/ui/shiny-button";
+import { ShinyInputWrapper } from "@/components/ui/shiny-input-wrapper";
 import { Textarea } from "@/components/ui/textarea";
 import { InputOTP, InputOTPGroup, InputOTPSlot } from "@/components/ui/input-otp";
 import {
@@ -62,14 +63,16 @@ export function WaitlistForm() {
             {/* Email */}
             <div className="flex flex-col gap-1.5">
               <label className="text-xs text-[#6b7280]">Email address</label>
-              <Input
-                type="email"
-                placeholder="you@example.com"
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                required
-                className="border-[#222] bg-[#141414] text-sm text-foreground placeholder:text-[#2a2a2a] focus-visible:ring-primary/40"
-              />
+              <ShinyInputWrapper>
+                <Input
+                  type="email"
+                  placeholder="you@example.com"
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  required
+                  className="border-0 bg-transparent text-sm text-foreground placeholder:text-[#2a2a2a] outline-none shadow-none focus-visible:ring-0 focus-visible:border-0 focus-visible:shadow-none focus-visible:outline-none"
+                />
+              </ShinyInputWrapper>
               {error && <p className="text-xs text-red-400">{error}</p>}
             </div>
 
@@ -79,17 +82,19 @@ export function WaitlistForm() {
                 Invite code{" "}
                 <span className="text-[#2a2a2a]">(optional)</span>
               </label>
-              <InputOTP maxLength={6} value={inviteCode} onChange={setInviteCode}>
-                <InputOTPGroup className="gap-2">
-                  {Array.from({ length: 6 }).map((_, i) => (
-                    <InputOTPSlot
-                      key={i}
-                      index={i}
-                      className="h-10 w-10 rounded-md border-[#222] bg-[#141414] text-foreground"
-                    />
-                  ))}
-                </InputOTPGroup>
-              </InputOTP>
+              <ShinyInputWrapper className="px-3 py-2">
+                <InputOTP maxLength={6} value={inviteCode} onChange={setInviteCode}>
+                  <InputOTPGroup className="gap-2">
+                    {Array.from({ length: 6 }).map((_, i) => (
+                      <InputOTPSlot
+                        key={i}
+                        index={i}
+                        className="h-9 w-9 rounded-md border-[#333] bg-[#1a1a1a] text-foreground focus:ring-0 data-[active=true]:ring-0 data-[active=true]:shadow-none data-[active=true]:border-transparent data-[active=true]:outline-none"
+                      />
+                    ))}
+                  </InputOTPGroup>
+                </InputOTP>
+              </ShinyInputWrapper>
             </div>
 
             {/* Use case */}
@@ -97,13 +102,15 @@ export function WaitlistForm() {
               <label className="text-xs text-[#6b7280]">
                 What will you use AgentMesh for?
               </label>
-              <Textarea
-                placeholder="Describe your use case..."
-                value={useCase}
-                onChange={(e) => setUseCase(e.target.value)}
-                rows={3}
-                className="resize-none border-[#222] bg-[#141414] text-sm text-foreground placeholder:text-[#2a2a2a] focus-visible:ring-primary/40"
-              />
+              <ShinyInputWrapper>
+                <Textarea
+                  placeholder="Describe your use case..."
+                  value={useCase}
+                  onChange={(e) => setUseCase(e.target.value)}
+                  rows={3}
+                  className="resize-none border-0 bg-transparent text-sm text-foreground placeholder:text-[#2a2a2a] outline-none shadow-none focus-visible:ring-0 focus-visible:border-0 focus-visible:shadow-none focus-visible:outline-none"
+                />
+              </ShinyInputWrapper>
             </div>
 
             <ShinyButton type="submit" disabled={loading} className="w-full justify-center">
