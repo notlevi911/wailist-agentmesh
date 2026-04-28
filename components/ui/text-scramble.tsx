@@ -1,12 +1,13 @@
 "use client";
 
-import { useState, useCallback, useRef, useEffect } from "react";
+import React, { useState, useCallback, useRef, useEffect } from "react";
 
 const CHARS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
 
 interface TextScrambleProps {
   text: string;
   className?: string;
+  style?: React.CSSProperties;
   autoPlay?: boolean;
   delay?: number;
 }
@@ -14,6 +15,7 @@ interface TextScrambleProps {
 export function TextScramble({
   text,
   className = "",
+  style,
   autoPlay = false,
   delay = 400,
 }: TextScrambleProps) {
@@ -69,7 +71,7 @@ export function TextScramble({
   );
 
   return (
-    <span className={`cursor-default select-none ${className}`} onMouseEnter={scramble}>
+    <span className={`cursor-default select-none ${className}`} style={style} onMouseEnter={scramble}>
       {displayText}
     </span>
   );

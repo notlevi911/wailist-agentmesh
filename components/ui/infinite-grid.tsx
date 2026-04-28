@@ -29,7 +29,7 @@ const GridPattern = ({
         <path
           d="M 40 0 L 0 0 0 40"
           fill="none"
-          stroke="#4c1d95"
+          stroke="#7c3aed"
           strokeWidth="1"
         />
       </motion.pattern>

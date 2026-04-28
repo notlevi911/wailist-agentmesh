@@ -30,7 +30,18 @@ export function Hero() {
           style={{ letterSpacing: "-2px" }}
         >
           Agent
-          <TextScramble text="Mesh" autoPlay delay={600} className="text-primary" />
+          <TextScramble
+            text="Mesh"
+            autoPlay
+            delay={600}
+            className="inline-block"
+            style={{
+              background: "linear-gradient(135deg, #6b21a8 0%, #9333ea 45%, #7c3aed 100%)",
+              WebkitBackgroundClip: "text",
+              WebkitTextFillColor: "transparent",
+              backgroundClip: "text",
+            }}
+          />
         </h1>
 
         {/* Tagline */}
