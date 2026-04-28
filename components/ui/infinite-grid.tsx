@@ -39,7 +39,7 @@ const GridPattern = ({
 );
 
 interface InfiniteGridProps {
-  children: React.ReactNode;
+  children?: React.ReactNode;
   className?: string;
 }
 

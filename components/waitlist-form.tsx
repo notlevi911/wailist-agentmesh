@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { ShinyButton } from "@/components/ui/shiny-button";
@@ -22,6 +22,7 @@ export function WaitlistForm() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [success, setSuccess] = useState(false);
+  const [count, setCount] = useState<number | null>(null);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -48,14 +49,36 @@ export function WaitlistForm() {
     }
   };
 
+  useEffect(() => {
+    let mounted = true;
+    fetch("/api/waitlist/count")
+      .then((r) => r.json())
+      .then((j) => {
+        if (!mounted) return;
+        if (typeof j.count === "number") setCount(j.count);
+      })
+      .catch(() => {
+        if (!mounted) return;
+        setCount(null);
+      });
+    return () => {
+      mounted = false;
+    };
+  }, []);
+
   return (
     <section id="waitlist" className="mx-auto max-w-lg px-6 py-24">
       <p className="mb-2 text-xs font-semibold tracking-[2.5px] text-[#4b5563] uppercase">
         Early Access
       </p>
-      <h2 className="mb-8 text-3xl font-bold text-foreground" style={{ letterSpacing: "-0.5px" }}>
-        Join the waitlist
-      </h2>
+      <div className="mb-4 flex items-baseline justify-between">
+        <h2 className="text-3xl font-bold text-foreground" style={{ letterSpacing: "-0.5px" }}>
+          Join the waitlist
+        </h2>
+        <div className="text-sm text-[#6b7280]">
+          {count !== null ? `${100 + count} waitlisted` : "100+ waitlisted"}
+        </div>
+      </div>
 
       <Card className="border-[#1c1c1c] bg-[#0f0f0f]">
         <CardContent className="p-6">

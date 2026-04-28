@@ -3,11 +3,14 @@
 import { InfiniteGrid } from "@/components/ui/infinite-grid";
 import { AnimatedShinyScramble } from "@/components/ui/animated-shiny-scramble";
 import { ShinyButton } from "@/components/ui/shiny-button";
+import { useRouter } from "next/navigation";
 
 export function Hero() {
   const scrollToWaitlist = () => {
     document.getElementById("waitlist")?.scrollIntoView({ behavior: "smooth" });
   };
+
+  const router = useRouter();
 
   return (
     <InfiniteGrid className="min-h-screen">
@@ -49,9 +52,10 @@ export function Hero() {
         </p>
 
         {/* CTA */}
-        <ShinyButton onClick={scrollToWaitlist}>
-          Get Early Access
-        </ShinyButton>
+        <div className="mb-4 flex items-center gap-3">
+          <ShinyButton onClick={scrollToWaitlist}>Get Early Access</ShinyButton>
+          <ShinyButton onClick={() => router.push("/docs")}>Docs</ShinyButton>
+        </div>
       </div>
     </InfiniteGrid>
   );

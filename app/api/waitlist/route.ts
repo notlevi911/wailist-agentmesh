@@ -16,6 +16,7 @@ export async function POST(req: NextRequest) {
   });
 
   if (error) {
+    console.error("waitlist insert error:", error);
     if (error.code === "23505") {
       return NextResponse.json(
         { error: "Already on the waitlist" },
