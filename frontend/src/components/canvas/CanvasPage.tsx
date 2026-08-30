@@ -455,6 +455,7 @@ export function CanvasPage({ workflowId }: CanvasPageProps) {
           onDelete={onDelete}
           onClose={() => setSelectedId(null)}
           width={inspectorW}
+          workflowId={workflowId}
         />
       </div>
 

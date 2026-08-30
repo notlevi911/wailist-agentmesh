@@ -285,13 +285,22 @@ func TestExpireStalePendingTransactions(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	// A unique, test-only provider, for the same reason
+	// TestExpireStalePendingTransactionsScopesToProvider uses one: these
+	// sweeps are scoped only by provider, not by user or row, and every
+	// package's tests share one database. Sweeping the real "cashfree"
+	// expired other packages' in-flight pending rows and counted their
+	// concurrently-created ones, so the exact-count assertions below raced
+	// whatever else happened to be funding a user at that moment.
+	sweepProvider := fmt.Sprintf("cashfree-expiretest-%d", time.Now().UnixNano())
+
 	orderID := fmt.Sprintf("order_expire_%d", time.Now().UnixNano())
-	if _, err := store.CreateCreditTransaction(ctx, user.ID, orderID, 10000, 0.012); err != nil {
+	if _, err := store.CreateCreditTransactionForProvider(ctx, sweepProvider, user.ID, orderID, 10000, 0.012); err != nil {
 		t.Fatal(err)
 	}
 
 	// Row is only a few milliseconds old — a 24h threshold must not touch it.
-	n, err := store.ExpireStalePendingTransactions(ctx, "cashfree", 24*time.Hour)
+	n, err := store.ExpireStalePendingTransactions(ctx, sweepProvider, 24*time.Hour)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -299,17 +308,18 @@ func TestExpireStalePendingTransactions(t *testing.T) {
 		t.Fatalf("want 0 rows expired (too fresh), got %d", n)
 	}
 
-	// A near-zero threshold makes the row qualify as stale.
-	n2, err := store.ExpireStalePendingTransactions(ctx, "cashfree", time.Millisecond)
+	// A zero threshold (cutoff = the database's own now) makes the row
+	// qualify as stale without racing a fixed small duration.
+	n2, err := store.ExpireStalePendingTransactions(ctx, sweepProvider, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if n2 < 1 {
-		t.Fatalf("want at least 1 row expired, got %d", n2)
+	if n2 != 1 {
+		t.Fatalf("want exactly 1 row expired, got %d", n2)
 	}
 
 	// Re-running must not re-touch rows that are no longer 'pending'.
-	n3, err := store.ExpireStalePendingTransactions(ctx, "cashfree", time.Millisecond)
+	n3, err := store.ExpireStalePendingTransactions(ctx, sweepProvider, 0)
 	if err != nil {
 		t.Fatal(err)
 	}

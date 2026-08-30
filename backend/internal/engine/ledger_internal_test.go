@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/agentmesh/backend/internal/db"
+	"github.com/agentmesh/backend/internal/engine/nodes"
 	"github.com/agentmesh/backend/internal/models"
 	"github.com/agentmesh/backend/internal/sse"
 	"github.com/agentmesh/backend/internal/x402"
@@ -192,6 +193,20 @@ func (f *fakeUSDCSignerForLedgerTest) SignAndSendPayment(_ context.Context, _, _
 func (f *fakeUSDCSignerForLedgerTest) SignUSDCPaymentGroup(_ context.Context, _, _ string, _, _ uint64, _ string) ([]string, int, error) {
 	return []string{"g0", "g1"}, 0, nil
 }
+
+func (f *fakeUSDCSignerForLedgerTest) SignUSDCPaymentSingle(_ context.Context, _, _ string, _, _ uint64) ([]string, int, error) {
+	return []string{"g0"}, 0, nil
+}
+
+// Compile-time proof that this double really does satisfy the interface its
+// doc comment claims. reserveAndFundRun reaches its signer via
+// `x, _ := r.walletSvc.(nodes.USDCGroupSigner)`, which discards the ok and
+// degrades to the no-funding path when the assertion fails -- so a double
+// that has fallen behind the interface does not fail to compile, it
+// silently turns every run-funding assertion here into a no-op. That is
+// exactly what happened when SignUSDCPaymentSingle was added to
+// USDCGroupSigner and this double was not updated with it.
+var _ nodes.USDCGroupSigner = (*fakeUSDCSignerForLedgerTest)(nil)
 
 // TestReserveAndFundRunFailsRatherThanSilentlyDegradingWhenRecordRunFundingFails
 // is a white-box regression test for the exact bug this branch's final

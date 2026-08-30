@@ -1,5 +1,12 @@
 export type NodeType =
-  "trigger" | "agent" | "provider" | "tool" | "tool402" | "action" | "end";
+  | "trigger"
+  | "agent"
+  | "provider"
+  | "tool"
+  | "tool402"
+  | "action"
+  | "state"
+  | "end";
 export type EdgeKind = "flow" | "attach";
 export type PortName = "in" | "out" | "model" | "tools" | "top";
 
@@ -63,6 +70,13 @@ export interface WorkflowNode {
   // nested body, and real endpoints want one.
   bodyMode?: "params" | "json";
   bodyTemplate?: string;
+  // state-specific — reads and writes the workflow's persisted variables,
+  // which survive between runs. stateValue is the literal to store for
+  // "set" (itself subject to {{state.x}} expansion) or the numeric delta
+  // for "increment".
+  stateOp?: "get" | "set" | "increment" | "delete";
+  stateKey?: string;
+  stateValue?: string;
   // trigger-specific
   source?: string;
   // email action-specific

@@ -8,6 +8,7 @@ import (
 
 	"github.com/agentmesh/backend/internal/db"
 	"github.com/agentmesh/backend/internal/engine"
+	"github.com/agentmesh/backend/internal/engine/nodes"
 	"github.com/agentmesh/backend/internal/models"
 	"github.com/agentmesh/backend/internal/sse"
 	"github.com/agentmesh/backend/internal/x402"
@@ -28,6 +29,20 @@ type fakeRelaySigner struct{ noopSigner }
 func (f *fakeRelaySigner) SignUSDCPaymentGroup(_ context.Context, _, _ string, _, _ uint64, _ string) ([]string, int, error) {
 	return []string{"g0", "g1"}, 0, nil
 }
+
+func (f *fakeRelaySigner) SignUSDCPaymentSingle(_ context.Context, _, _ string, _, _ uint64) ([]string, int, error) {
+	return []string{"g0"}, 0, nil
+}
+
+// Compile-time proof that the test doubles really do satisfy the interface
+// they claim to. reserveAndFundRun and executeTool402V2Relay both reach
+// their signer via `x, _ := r.walletSvc.(nodes.USDCGroupSigner)`, which
+// discards the ok and degrades to the no-funding path when the assertion
+// fails -- so a double that has fallen behind the interface does not fail
+// to compile, it silently turns every run-funding assertion in this package
+// into a no-op. That is exactly what happened when SignUSDCPaymentSingle
+// was added to USDCGroupSigner and these doubles were not updated with it.
+var _ nodes.USDCGroupSigner = (*fakeRelaySigner)(nil)
 
 func newTestRunnerWithRelay(t *testing.T, relayBaseURL string) (*engine.Runner, *db.Store) {
 	t.Helper()

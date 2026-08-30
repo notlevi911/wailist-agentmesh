@@ -244,7 +244,7 @@ func TestInsufficientBalanceBlocksToolNodeBeforeExecution(t *testing.T) {
 	}
 }
 
-func TestAgentNodeChargesOwnFeeAndAttachedToolCalls(t *testing.T) {
+func TestAgentNodeChargesAttachedToolCallsButNotItsOwnByokTurn(t *testing.T) {
 	runner, store := newTestRunner(t)
 	ctx := context.Background()
 
@@ -314,17 +314,22 @@ func TestAgentNodeChargesOwnFeeAndAttachedToolCalls(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// 100000 - 10000 (agent's own fee) - 10000 (attached tool call) = 80000
-	if balance != 80000 {
-		t.Fatalf("want balance 80000 got %d", balance)
+	// 100000 - 10000 (attached tool call) = 90000. The agent's own turn
+	// runs on the user's own API key (BYOK), which costs the platform
+	// nothing and is therefore not charged -- see Runner.debitAgentFee,
+	// which returns early unless the provider is in platform-key mode.
+	if balance != 90000 {
+		t.Fatalf("want balance 90000 got %d", balance)
 	}
 
 	entries, err := store.ListDebitLedger(ctx, run.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(entries) != 2 {
-		t.Fatalf("want 2 ledger entries (agent fee + tool fee), got %d: %+v", len(entries), entries)
+	// One entry, not two: the attached tool call is billed, the BYOK agent
+	// turn that requested it is not.
+	if len(entries) != 1 {
+		t.Fatalf("want 1 ledger entry (the attached tool call), got %d: %+v", len(entries), entries)
 	}
 	var sawAgentFee, sawToolFee bool
 	for _, e := range entries {
@@ -335,8 +340,11 @@ func TestAgentNodeChargesOwnFeeAndAttachedToolCalls(t *testing.T) {
 			sawToolFee = true
 		}
 	}
-	if !sawAgentFee || !sawToolFee {
-		t.Fatalf("want one ledger entry for agent1 and one for tool1, got %+v", entries)
+	if sawAgentFee {
+		t.Fatalf("a BYOK agent turn must not be billed, got %+v", entries)
+	}
+	if !sawToolFee {
+		t.Fatalf("want a ledger entry for the attached tool call (tool1), got %+v", entries)
 	}
 }
 
@@ -505,18 +513,17 @@ func TestAgentBlocksAttachedX402CallWhenBalanceInsufficientForFee(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	if balance != 0 {
-		t.Fatalf("want balance 0 (agent's own $0.01 fee charged, attached call blocked before it could spend anything else), got %d", balance)
+	// Untouched: the BYOK agent turn itself is free, and the attached call
+	// was blocked by the floor guard before it could spend anything.
+	if balance != 10000 {
+		t.Fatalf("want balance 10000 (BYOK agent turn not charged, attached call blocked before it could spend anything), got %d", balance)
 	}
 	entries, err := store.ListDebitLedger(ctx, run.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(entries) != 1 {
-		t.Fatalf("want exactly 1 ledger entry (the agent's own fee), got %d", len(entries))
-	}
-	if entries[0].Kind != models.DebitKindByokFlatFee || entries[0].NodeID != "a1" {
-		t.Fatalf("want a single byok_flat_fee entry for node a1, got kind=%s node=%s", entries[0].Kind, entries[0].NodeID)
+	if len(entries) != 0 {
+		t.Fatalf("want no ledger entries (nothing billable completed), got %d: %+v", len(entries), entries)
 	}
 }
 
@@ -957,9 +964,9 @@ func TestAgentAttachedRelayToolBillsOnInboundSettlementDespiteOutboundFailure(t 
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Agent's own $0.01 fee + the real 250000 run-funded cost, billed
-	// despite the target's 500 response to the paid request.
-	wantBalance := int64(800_000 - 10_000 - 250_000)
+	// The real 250000 run-funded cost, billed despite the target's 500
+	// response to the paid request. The BYOK agent turn itself is free.
+	wantBalance := int64(800_000 - 250_000)
 	if balance != wantBalance {
 		t.Fatalf("want balance %d (billed for the signed outbound payment despite the target's failure), got %d", wantBalance, balance)
 	}
@@ -1139,9 +1146,10 @@ func TestSequentialRelayToolCallsCannotOverspendPastBalance(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	wantBalance := int64(800_000 - 10_000 - 250_000)
+	// One payment only; the BYOK agent turn itself is free.
+	wantBalance := int64(800_000 - 250_000)
 	if balance != wantBalance {
-		t.Fatalf("want balance %d (exactly one payment + the agent's own fee, no overspend), got %d", wantBalance, balance)
+		t.Fatalf("want balance %d (exactly one payment, no overspend), got %d", wantBalance, balance)
 	}
 
 	entries, err := store.ListDebitLedger(ctx, run.ID)
@@ -1450,10 +1458,10 @@ func TestAgentBranchingBetweenTwoPricedToolsDoesNotBlockMidRun(t *testing.T) {
 		t.Fatal(err)
 	}
 	// 1300000 - 750000 (reserved+funded for the run, sum of both estimated
-	// prices) - 10000 (agent's own flat fee) + 50000 (unused pool released:
-	// estimated 400000+350000=750000, actually paid 350000+350000=700000
-	// because tool_a's price drifted down between estimate and settle time).
-	wantBalance := int64(1_300_000 - 750_000 - 10_000 + 50_000)
+	// prices) + 50000 (unused pool released: estimated 400000+350000=750000,
+	// actually paid 350000+350000=700000 because tool_a's price drifted down
+	// between estimate and settle time). The BYOK agent turn is free.
+	wantBalance := int64(1_300_000 - 750_000 + 50_000)
 	if balance != wantBalance {
 		t.Fatalf("want balance %d, got %d", wantBalance, balance)
 	}
@@ -1602,7 +1610,8 @@ func TestExactBalanceRunLevelAttachedCallsNotBlockedByFloorGuard(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	wantBalance := int64(210_000 - 10_000 - 100_000 - 100_000)
+	// Both tools' real costs; the BYOK agent turn itself is free.
+	wantBalance := int64(210_000 - 100_000 - 100_000)
 	if balance != wantBalance {
 		t.Fatalf("want balance %d, got %d", wantBalance, balance)
 	}
@@ -2260,17 +2269,17 @@ func TestLegacyToolAttachedAlongsideRunFundedV2ToolBillsIdenticallyToStandalone(
 		t.Fatalf("want success got %s", final.Status)
 	}
 
-	// Final balance: 1000000 - 10000 (agent's own flat fee) - 300000 (v2
-	// run-level pool, real settled amount) - 500000 (legacy flat fee, real
-	// DB-backed ledger) = 190000. A wrong balance here would mean the
-	// legacy fee was billed against the wrong ledger (or not billed /
+	// Final balance: 1000000 - 300000 (v2 run-level pool, real settled
+	// amount) - 500000 (legacy flat fee, real DB-backed ledger) = 200000.
+	// The BYOK agent turn itself is free. A wrong balance here would mean
+	// the legacy fee was billed against the wrong ledger (or not billed /
 	// double-billed).
 	balance, err := store.GetCreditBalance(ctx, user.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if balance != 190_000 {
-		t.Fatalf("want final balance 190000 (1000000 - 10000 agent fee - 300000 v2 - 500000 legacy), got %d -- legacy tool billing was not identical to the no-v2-attached case", balance)
+	if balance != 200_000 {
+		t.Fatalf("want final balance 200000 (1000000 - 300000 v2 - 500000 legacy), got %d -- legacy tool billing was not identical to the no-v2-attached case", balance)
 	}
 
 	entries, err := store.ListDebitLedger(ctx, run.ID)

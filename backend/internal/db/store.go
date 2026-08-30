@@ -663,11 +663,19 @@ func (s *Store) MarkCreditTransactionStatus(ctx context.Context, provider, provi
 // longer one to avoid expiring payments still working through block confirmations. Keeps
 // 'pending' meaningful as "still in progress" rather than accumulating dead rows.
 func (s *Store) ExpireStalePendingTransactions(ctx context.Context, provider string, olderThan time.Duration) (int64, error) {
-	cutoff := time.Now().Add(-olderThan)
+	// The cutoff is computed by the database, not by this process.
+	// created_at is written by Postgres NOW(), so comparing it against an
+	// app-computed time.Now() straddles two clocks: any skew between them
+	// (a containerised Postgres on a macOS VM routinely runs a fraction of
+	// a second ahead of the host) shifts the effective window by that skew,
+	// and a row created moments ago can be newer than a cutoff that was
+	// supposed to already include it. Evaluating both sides in the DB makes
+	// the window exactly olderThan, whatever either clock says.
 	tag, err := s.pool.Exec(ctx, `
 		UPDATE credit_ledger SET status = 'expired'
-		WHERE status = 'pending' AND provider = $1 AND created_at < $2
-	`, provider, cutoff)
+		WHERE status = 'pending' AND provider = $1
+		  AND created_at < NOW() - make_interval(secs => $2)
+	`, provider, olderThan.Seconds())
 	if err != nil {
 		return 0, err
 	}
@@ -949,4 +957,135 @@ func (s *Store) ListX402RelaySettlementsByRunFunding(ctx context.Context, runFun
 		out = append(out, row)
 	}
 	return out, rows.Err()
+}
+
+// --- Workflow variable methods ---
+
+const (
+	// MaxWorkflowVariables caps how many keys one workflow may hold. This
+	// is bounded key/value state for "remember the last row I processed",
+	// not a document store.
+	MaxWorkflowVariables = 64
+	// maxWorkflowVariableBytes mirrors the CHECK constraint on the column,
+	// enforced here too so the caller gets a typed error instead of a raw
+	// Postgres constraint violation.
+	maxWorkflowVariableBytes = 16384
+)
+
+var (
+	ErrVariableQuotaExceeded = errors.New("workflow variable limit reached")
+	ErrVariableTooLarge      = errors.New("workflow variable value too large")
+)
+
+// GetWorkflowVariables returns every variable for a workflow, JSON-decoded.
+// Returns an empty (non-nil) map when the workflow has none, so callers can
+// index it without a nil check.
+func (s *Store) GetWorkflowVariables(ctx context.Context, workflowID string) (map[string]any, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT key, value FROM workflow_variables WHERE workflow_id=$1
+	`, workflowID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	out := make(map[string]any)
+	for rows.Next() {
+		var k string
+		var v []byte
+		if err := rows.Scan(&k, &v); err != nil {
+			return nil, err
+		}
+		var decoded any
+		json.Unmarshal(v, &decoded)
+		out[k] = decoded
+	}
+	return out, rows.Err()
+}
+
+// SetWorkflowVariable upserts one variable. Concurrent writers are
+// last-write-wins by design: the alternative (optimistic versioning) would
+// make the common cases — "cache this token", "remember this cursor" —
+// fail spuriously when two runs overlap. Callers that need a correct
+// counter under concurrency use IncrementWorkflowVariable instead, which
+// is atomic in the database.
+//
+// The key-count quota is checked inside the same transaction as the write
+// so two concurrent inserts cannot both slip past the cap.
+func (s *Store) SetWorkflowVariable(ctx context.Context, workflowID, key string, valueJSON []byte) error {
+	if len(valueJSON) > maxWorkflowVariableBytes {
+		return fmt.Errorf("%w: %d bytes, limit %d", ErrVariableTooLarge, len(valueJSON), maxWorkflowVariableBytes)
+	}
+	if key == "" || len(key) > 128 {
+		return errors.New("workflow variable key must be 1-128 characters")
+	}
+
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+
+	var count int
+	var exists bool
+	// COALESCE because BOOL_OR over zero rows is NULL, which will not scan
+	// into a bool.
+	if err := tx.QueryRow(ctx, `
+		SELECT COUNT(*), COALESCE(BOOL_OR(key=$2), FALSE)
+		FROM workflow_variables WHERE workflow_id=$1
+	`, workflowID, key).Scan(&count, &exists); err != nil {
+		return err
+	}
+	// Updating a key that already exists never adds to the count, so it is
+	// allowed even at the cap.
+	if !exists && count >= MaxWorkflowVariables {
+		return fmt.Errorf("%w: %d keys, limit %d", ErrVariableQuotaExceeded, count, MaxWorkflowVariables)
+	}
+
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO workflow_variables (workflow_id, key, value, updated_at)
+		VALUES ($1,$2,$3::jsonb,NOW())
+		ON CONFLICT (workflow_id, key) DO UPDATE
+		SET value = EXCLUDED.value, updated_at = NOW()
+	`, workflowID, key, string(valueJSON)); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
+// IncrementWorkflowVariable adds delta to a numeric variable and returns
+// the new value, creating it at delta if absent. A single statement, so
+// overlapping runs of the same workflow cannot lose an update the way a
+// read-then-write from application code would.
+//
+// A non-numeric existing value is replaced by delta rather than erroring —
+// the counter use case wants to keep counting, not to fail a run because
+// something once wrote a string there.
+func (s *Store) IncrementWorkflowVariable(ctx context.Context, workflowID, key string, delta float64) (float64, error) {
+	if key == "" || len(key) > 128 {
+		return 0, errors.New("workflow variable key must be 1-128 characters")
+	}
+	var out float64
+	err := s.pool.QueryRow(ctx, `
+		INSERT INTO workflow_variables (workflow_id, key, value, updated_at)
+		VALUES ($1,$2,to_jsonb($3::numeric),NOW())
+		ON CONFLICT (workflow_id, key) DO UPDATE
+		SET value = to_jsonb(
+			CASE WHEN jsonb_typeof(workflow_variables.value) = 'number'
+			     THEN (workflow_variables.value)::numeric + $3::numeric
+			     ELSE $3::numeric
+			END),
+		    updated_at = NOW()
+		RETURNING (value)::numeric
+	`, workflowID, key, delta).Scan(&out)
+	return out, err
+}
+
+// DeleteWorkflowVariable removes one key. Deleting a key that does not
+// exist is not an error.
+func (s *Store) DeleteWorkflowVariable(ctx context.Context, workflowID, key string) error {
+	_, err := s.pool.Exec(ctx, `
+		DELETE FROM workflow_variables WHERE workflow_id=$1 AND key=$2
+	`, workflowID, key)
+	return err
 }

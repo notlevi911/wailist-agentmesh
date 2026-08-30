@@ -25,6 +25,12 @@ const PORT_POS: Record<NodeType, Partial<Record<PortName, PortFn>>> = {
     in: (W, H) => ({ x: 0, y: H / 2 }),
     out: (W, H) => ({ x: W, y: H / 2 }),
   },
+  // state is a plain flow step, like action: it reads or writes one saved
+  // value and passes control on. It never attaches to an agent.
+  state: {
+    in: (W, H) => ({ x: 0, y: H / 2 }),
+    out: (W, H) => ({ x: W, y: H / 2 }),
+  },
   end: { in: (W, H) => ({ x: 0, y: H / 2 }) },
 };
 
@@ -41,9 +47,17 @@ export function portWorld(node: WorkflowNode, port: PortName): PortCoord {
 // kind picks which of tool402's two source ports an edge rendered from —
 // "top" when it's attached to an agent as a tool, "out" when it's a flow
 // step. Every other type has exactly one source port regardless of kind.
-export function portForFrom(n: WorkflowNode, kind: EdgeKind = "flow"): PortName {
+export function portForFrom(
+  n: WorkflowNode,
+  kind: EdgeKind = "flow",
+): PortName {
   if (kind === "attach") return "top";
-  if (n.type === "trigger" || n.type === "agent" || n.type === "action")
+  if (
+    n.type === "trigger" ||
+    n.type === "agent" ||
+    n.type === "action" ||
+    n.type === "state"
+  )
     return "out";
   if (n.type === "provider" || n.type === "tool" || n.type === "tool402")
     return "top";
@@ -51,7 +65,12 @@ export function portForFrom(n: WorkflowNode, kind: EdgeKind = "flow"): PortName 
 }
 
 export function portForTo(n: WorkflowNode): PortName {
-  if (n.type === "agent" || n.type === "action" || n.type === "end")
+  if (
+    n.type === "agent" ||
+    n.type === "action" ||
+    n.type === "state" ||
+    n.type === "end"
+  )
     return "in";
   return "in";
 }
@@ -71,17 +90,19 @@ export function isValidConnection(
   ) {
     return toPort === "model" || toPort === "tools";
   }
-  // flow: trigger/agent/action/tool402 → agent/action/end/tool402 (in port)
+  // flow: trigger/agent/action/state/tool402 → agent/action/state/end/tool402
   // tool402 is included on both sides so an x402 endpoint can sit directly
   // in the flow chain (e.g. trigger → tool402 → end), not just hang off an
   // agent as an attached tool — the runner already executes tool402 as a
   // standalone step (see runner.go's NodeTypeTool402 case).
   if (toPort === "in") {
     return (
-      (["trigger", "agent", "action", "tool402"] as NodeType[]).includes(
-        from.type,
-      ) &&
-      (["agent", "action", "end", "tool402"] as NodeType[]).includes(to.type)
+      (
+        ["trigger", "agent", "action", "state", "tool402"] as NodeType[]
+      ).includes(from.type) &&
+      (["agent", "action", "state", "end", "tool402"] as NodeType[]).includes(
+        to.type,
+      )
     );
   }
   return false;

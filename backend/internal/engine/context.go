@@ -10,6 +10,11 @@ type RunContext struct {
 	outputs map[string]any
 	input   any
 	runID   string
+	// state is the workflow's persisted variables, loaded once at run
+	// start. Reads during the run see this snapshot; a state node's write
+	// updates both the database and this map so a later node in the same
+	// run sees its own write.
+	state map[string]any
 }
 
 func NewRunContext(runID string, inputJSON []byte) *RunContext {
@@ -84,4 +89,35 @@ func anyToString(v any) string {
 	}
 	b, _ := json.Marshal(v)
 	return string(b)
+}
+
+// SetState installs the workflow's persisted variables for this run.
+func (rc *RunContext) SetState(state map[string]any) {
+	rc.mu.Lock()
+	defer rc.mu.Unlock()
+	rc.state = state
+}
+
+// State returns a copy of the run's view of the workflow's variables.
+// A copy, not the map itself, so a node cannot mutate shared state
+// without going through the store.
+func (rc *RunContext) State() map[string]any {
+	rc.mu.RLock()
+	defer rc.mu.RUnlock()
+	out := make(map[string]any, len(rc.state))
+	for k, v := range rc.state {
+		out[k] = v
+	}
+	return out
+}
+
+// setStateKey updates one key in the run's snapshot after a successful
+// write, so a later node in the same run reads the value this run wrote.
+func (rc *RunContext) setStateKey(key string, value any) {
+	rc.mu.Lock()
+	defer rc.mu.Unlock()
+	if rc.state == nil {
+		rc.state = make(map[string]any)
+	}
+	rc.state[key] = value
 }
