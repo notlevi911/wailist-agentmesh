@@ -1,0 +1,85 @@
+apply plugin: 'com.android.application'
+
+android {
+    namespace "ai.agentmesh.app"
+    compileSdk rootProject.ext.compileSdkVersion
+    defaultConfig {
+        applicationId "ai.agentmesh.app"
+        minSdkVersion rootProject.ext.minSdkVersion
+        targetSdkVersion rootProject.ext.targetSdkVersion
+        versionCode 1
+        versionName "1.0"
+        testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
+        aaptOptions {
+             // Files and dirs to omit from the packaged assets dir, modified to accommodate modern web apps.
+             // Default: https://android.googlesource.com/platform/frameworks/base/+/282e181b58cf72b6ca770dc7ca5f91f135444502/tools/aapt/AaptAssets.cpp#61
+            ignoreAssetsPattern '!.svn:!.git:!.ds_store:!*.scc:.*:!CVS:!thumbs.db:!picasa.ini:!*~'
+        }
+    }
+    // android.yml (bundleRelease) restores a real keystore to
+    // mobile/android/release.keystore and sets these three env vars before
+    // invoking Gradle. Without a signingConfig actually wired to them, the
+    // workflow's own restore/env-var steps ran for nothing: bundleRelease
+    // would succeed and produce an AAB, but an UNSIGNED one -- Play's
+    // internal-testing track rejects that on upload, only surfacing the
+    // problem well after the "signed and installable" workflow already
+    // reported success.
+    //
+    // Only defined -- and only required -- for an actual release build. A
+    // debug build (what every device-testing session in this repo uses
+    // today) never touches this block, so a contributor with no keystore
+    // can still `assembleDebug` with no setup.
+    signingConfigs {
+        release {
+            // android.yml writes this to mobile/android/release.keystore --
+            // the Gradle ROOT project dir, since bundleRelease runs with
+            // working-directory: mobile/android. file() from inside this
+            // module's own build.gradle resolves relative to mobile/android
+            // /app instead, so this must go through rootProject explicitly.
+            def keystoreFile = rootProject.file('release.keystore')
+            if (keystoreFile.exists()) {
+                storeFile keystoreFile
+                storePassword System.getenv("KEYSTORE_PASSWORD")
+                keyAlias System.getenv("KEY_ALIAS")
+                keyPassword System.getenv("KEY_PASSWORD")
+            }
+        }
+    }
+    buildTypes {
+        release {
+            minifyEnabled false
+            proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
+            signingConfig signingConfigs.release
+        }
+    }
+}
+
+repositories {
+    flatDir{
+        dirs '../capacitor-cordova-android-plugins/src/main/libs', 'libs'
+    }
+}
+
+dependencies {
+    implementation fileTree(include: ['*.jar'], dir: 'libs')
+    implementation "androidx.appcompat:appcompat:$androidxAppCompatVersion"
+    implementation "androidx.coordinatorlayout:coordinatorlayout:$androidxCoordinatorLayoutVersion"
+    implementation "androidx.core:core-splashscreen:$coreSplashScreenVersion"
+    implementation project(':capacitor-android')
+    testImplementation "junit:junit:$junitVersion"
+    androidTestImplementation "androidx.test.ext:junit:$androidxJunitVersion"
+    androidTestImplementation "androidx.test.espresso:espresso-core:$androidxEspressoCoreVersion"
+    implementation "com.google.android.gms:play-services-location:$playServicesLocationVersion"
+    implementation project(':capacitor-cordova-android-plugins')
+}
+
+apply from: 'capacitor.build.gradle'
+
+try {
+    def servicesJSON = file('google-services.json')
+    if (servicesJSON.text) {
+        apply plugin: 'com.google.gms.google-services'
+    }
+} catch(Exception e) {
+    logger.info("google-services.json not found, google-services plugin not applied. Push Notifications won't work")
+}

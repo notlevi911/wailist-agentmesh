@@ -14,8 +14,11 @@ import (
 	"github.com/agentmesh/backend/internal/api/handlers"
 	"github.com/agentmesh/backend/internal/db"
 	"github.com/agentmesh/backend/internal/engine"
+	"github.com/agentmesh/backend/internal/engine/nodes"
 	"github.com/agentmesh/backend/internal/payments"
+	"github.com/agentmesh/backend/internal/scheduler"
 	"github.com/agentmesh/backend/internal/sse"
+	"github.com/agentmesh/backend/internal/tendril"
 	"github.com/agentmesh/backend/internal/wallet"
 	"github.com/agentmesh/backend/internal/x402"
 )
@@ -30,6 +33,23 @@ func main() {
 		log.Fatalf("db: %v", err)
 	}
 	defer store.Close()
+
+	// Coupon catalog is configuration: COUPON_CODES="CODE:5,OTHER:12.50" (amounts
+	// in USD). Unset means no redeemable codes at all, which is the safe default —
+	// a code only grants credits while it's listed here. A malformed spec is fatal
+	// rather than partially applied, so a typo can't silently disable one code in a
+	// campaign while the rest stay live.
+	couponSpec := os.Getenv("COUPON_CODES")
+	catalog, err := db.ParseCouponCatalog(couponSpec)
+	if err != nil {
+		log.Fatalf("COUPON_CODES: %v", err)
+	}
+	store.SetCouponCatalog(catalog)
+	if len(catalog) == 0 {
+		log.Printf("no coupon codes configured (COUPON_CODES unset) — coupon redemption will reject every code")
+	} else {
+		log.Printf("coupon catalog loaded: %d code(s)", len(catalog))
+	}
 
 	broker := sse.NewBroker()
 
@@ -82,7 +102,10 @@ func main() {
 		nowPaymentsClient.UseSandbox()
 	}
 
-	maxRelayOutboundUSDMicros := envInt64Or("MAX_RELAY_OUTBOUND_USD_MICROS", 5_000_000) // $5.00 default
+	// $20.00 default, up from $5.00: Tendril's cheapest online machine is
+	// $6.00/hour and a 2-hour rent tops the shared pool up by $12.00 in one
+	// call, which the old ceiling rejected outright.
+	maxRelayOutboundUSDMicros := envInt64Or("MAX_RELAY_OUTBOUND_USD_MICROS", 20_000_000)
 
 	// Which /x402/relay a per-call paid tool402 request is routed through.
 	// Defaults to BASE_URL, since in a real deployment the same instance
@@ -102,7 +125,7 @@ func main() {
 	relayBaseURL := envOr("RELAY_BASE_URL", envOr("BASE_URL", "http://localhost:8080"))
 	log.Printf("x402 relay base URL: %s", relayBaseURL)
 
-	runner := engine.NewRunner(store, broker, walletSvc, relayBaseURL, platformSpendWalletEncMnemonic, engine.X402Config{
+	runner := engine.NewRunner(store, broker, walletSvc, relayBaseURL, platformSpendWalletEncMnemonic, mustEnv("ENCRYPTION_KEY"), engine.X402Config{
 		PlatformWalletEncMnemonic: platformWalletEncMnemonic,
 		USDCAssetID:               usdcAssetID,
 		FacilitatorClient:         facilitatorClient,
@@ -119,8 +142,31 @@ func main() {
 		"groq":      os.Getenv("PLATFORM_GROQ_API_KEY"),
 		"mistral":   os.Getenv("PLATFORM_MISTRAL_API_KEY"),
 	})
+	// Reuses the same Google app already configured for sign-in-with-Google
+	// (below) -- Gmail/Sheets/Calendar/Drive nodes fail closed with a clear
+	// error if unset, same pattern as SetTendril.
+	runner.SetGoogleOAuth(os.Getenv("GOOGLE_CLIENT_ID"), os.Getenv("GOOGLE_CLIENT_SECRET"))
+
+	var tendrilClient *tendril.Client
+	var tendrilSession *tendril.Session
+	if registryURL := envOr("TENDRIL_REGISTRY_URL", "https://tendrilregister.007575.xyz"); registryURL != "" {
+		tendrilClient = tendril.NewClient(registryURL)
+		// Wallet 2 is what pays Tendril through the relay, so Wallet 2's
+		// address is the one Tendril keys the shared credit pool to — sign the
+		// session with its mnemonic, not Wallet 1's.
+		sess, err := tendrilClient.Session(ctx, walletSvc, platformWalletEncMnemonic)
+		if err != nil {
+			log.Printf("tendril: registry session unavailable (%v) — tendril nodes will fail closed", err)
+		} else {
+			tendrilSession = sess
+			runner.SetTendril(tendrilClient, sess)
+			log.Printf("tendril: registry %s, pool wallet %s", registryURL, platformWalletAddr)
+		}
+	}
 
 	go expireStalePendingTransactionsLoop(ctx, store)
+	runner.StartLeaseReaper(ctx, nodes.ReaperInterval)
+	go scheduler.New(store, runner, broker, mustEnv("ENCRYPTION_KEY")).Run(ctx)
 
 	deps := &handlers.Deps{
 		Store:         store,
@@ -128,6 +174,7 @@ func main() {
 		Wallet:        walletSvc,
 		Engine:        runner,
 		BaseURL:       envOr("BASE_URL", "http://localhost:8080"),
+		RelayBaseURL:  relayBaseURL,
 		JWTSecret:     mustEnv("JWT_SECRET"),
 		EncryptionKey: mustEnv("ENCRYPTION_KEY"),
 
@@ -137,18 +184,51 @@ func main() {
 		GoogleClientID:     os.Getenv("GOOGLE_CLIENT_ID"),
 		GoogleClientSecret: os.Getenv("GOOGLE_CLIENT_SECRET"),
 
+		// Empty falls back to GoPlausible's facilitator (see
+		// defaultBazaarBaseURL) — set only to point at a mirror or a fake.
+		BazaarBaseURL: os.Getenv("BAZAAR_BASE_URL"),
+
 		Cashfree:      cashfreeClient,
 		CashfreeAppID: cashfreeClient.AppID,
 		NOWPayments:   nowPaymentsClient,
 
-		PlatformWalletAddress:     platformWalletAddr,
-		PlatformWalletEncMnemonic: platformWalletEncMnemonic,
-		FacilitatorClient:         facilitatorClient,
-		USDCAssetID:               usdcAssetID,
-		RelayNetwork:              relayNetwork,
-		RelayFeePayer:             relayFeePayer,
-		USDCSigner:                walletSvc,
-		MaxRelayOutboundUSDMicros: maxRelayOutboundUSDMicros,
+		PlatformWalletAddress:          platformWalletAddr,
+		PlatformWalletEncMnemonic:      platformWalletEncMnemonic,
+		PlatformSpendWalletEncMnemonic: platformSpendWalletEncMnemonic,
+		PlatformGeminiAPIKey:           os.Getenv("PLATFORM_GEMINI_API_KEY"),
+		FacilitatorClient:              facilitatorClient,
+		USDCAssetID:                    usdcAssetID,
+		RelayNetwork:                   relayNetwork,
+		RelayFeePayer:                  relayFeePayer,
+		USDCSigner:                     walletSvc,
+		MaxRelayOutboundUSDMicros:      maxRelayOutboundUSDMicros,
+		TendrilClient:                  tendrilClient,
+		TendrilSession:                 tendrilSession,
+
+		SlackOAuthClientID:          os.Getenv("SLACK_OAUTH_CLIENT_ID"),
+		SlackOAuthClientSecret:      os.Getenv("SLACK_OAUTH_CLIENT_SECRET"),
+		GitHubConnectorClientID:     os.Getenv("GITHUB_CONNECTOR_CLIENT_ID"),
+		GitHubConnectorClientSecret: os.Getenv("GITHUB_CONNECTOR_CLIENT_SECRET"),
+		NotionClientID:              os.Getenv("NOTION_CLIENT_ID"),
+		NotionClientSecret:          os.Getenv("NOTION_CLIENT_SECRET"),
+		AirtableClientID:            os.Getenv("AIRTABLE_CLIENT_ID"),
+		AirtableClientSecret:        os.Getenv("AIRTABLE_CLIENT_SECRET"),
+		HubSpotClientID:             os.Getenv("HUBSPOT_CLIENT_ID"),
+		HubSpotClientSecret:         os.Getenv("HUBSPOT_CLIENT_SECRET"),
+		AsanaClientID:               os.Getenv("ASANA_CLIENT_ID"),
+		AsanaClientSecret:           os.Getenv("ASANA_CLIENT_SECRET"),
+		ClickUpClientID:             os.Getenv("CLICKUP_CLIENT_ID"),
+		ClickUpClientSecret:         os.Getenv("CLICKUP_CLIENT_SECRET"),
+		JiraClientID:                os.Getenv("JIRA_CLIENT_ID"),
+		JiraClientSecret:            os.Getenv("JIRA_CLIENT_SECRET"),
+		LinearClientID:              os.Getenv("LINEAR_CLIENT_ID"),
+		LinearClientSecret:          os.Getenv("LINEAR_CLIENT_SECRET"),
+		MailchimpClientID:           os.Getenv("MAILCHIMP_CLIENT_ID"),
+		MailchimpClientSecret:       os.Getenv("MAILCHIMP_CLIENT_SECRET"),
+		GitLabClientID:              os.Getenv("GITLAB_CLIENT_ID"),
+		GitLabClientSecret:          os.Getenv("GITLAB_CLIENT_SECRET"),
+		TodoistClientID:             os.Getenv("TODOIST_CLIENT_ID"),
+		TodoistClientSecret:         os.Getenv("TODOIST_CLIENT_SECRET"),
 	}
 
 	r := api.NewRouter(deps)

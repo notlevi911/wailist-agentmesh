@@ -52,5 +52,33 @@ services:
       NOWPAYMENTS_IPN_SECRET: placeholder_nowpayments_ipn_secret
       NOWPAYMENTS_SANDBOX: "false"
 
+      # OAuth connector credentials — replace with real keys from each provider's dev console.
+      # Register redirect URI: http://localhost:3000/api/connectors/oauth/{provider}/callback
+      # Leave as placeholder to keep the route alive; real keys needed to complete the flow.
+      SLACK_OAUTH_CLIENT_ID: placeholder_slack_client_id
+      SLACK_OAUTH_CLIENT_SECRET: placeholder_slack_client_secret
+      GITHUB_CONNECTOR_CLIENT_ID: placeholder_github_connector_client_id
+      GITHUB_CONNECTOR_CLIENT_SECRET: placeholder_github_connector_client_secret
+      NOTION_CLIENT_ID: placeholder_notion_client_id
+      NOTION_CLIENT_SECRET: placeholder_notion_client_secret
+      AIRTABLE_CLIENT_ID: placeholder_airtable_client_id
+      AIRTABLE_CLIENT_SECRET: placeholder_airtable_client_secret
+      HUBSPOT_CLIENT_ID: placeholder_hubspot_client_id
+      HUBSPOT_CLIENT_SECRET: placeholder_hubspot_client_secret
+      ASANA_CLIENT_ID: placeholder_asana_client_id
+      ASANA_CLIENT_SECRET: placeholder_asana_client_secret
+      CLICKUP_CLIENT_ID: placeholder_clickup_client_id
+      CLICKUP_CLIENT_SECRET: placeholder_clickup_client_secret
+      JIRA_CLIENT_ID: placeholder_jira_client_id
+      JIRA_CLIENT_SECRET: placeholder_jira_client_secret
+      LINEAR_CLIENT_ID: placeholder_linear_client_id
+      LINEAR_CLIENT_SECRET: placeholder_linear_client_secret
+      MAILCHIMP_CLIENT_ID: placeholder_mailchimp_client_id
+      MAILCHIMP_CLIENT_SECRET: placeholder_mailchimp_client_secret
+      GITLAB_CLIENT_ID: placeholder_gitlab_client_id
+      GITLAB_CLIENT_SECRET: placeholder_gitlab_client_secret
+      TODOIST_CLIENT_ID: placeholder_todoist_client_id
+      TODOIST_CLIENT_SECRET: placeholder_todoist_client_secret
+
 volumes:
   agentmesh_pgdata:

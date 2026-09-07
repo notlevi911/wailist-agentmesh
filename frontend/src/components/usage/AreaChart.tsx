@@ -2,7 +2,7 @@
 import { useRef, useState } from "react";
 import { UsagePoint } from "@/lib/types";
 
-// Hand-rolled dual-line chart (no chart lib — matches the codebase's SVG-by-hand
+// Hand-rolled dual-line chart (no chart lib -- matches the codebase's SVG-by-hand
 // convention). Two series on two independent scales so both read clearly:
 // Spend = accent purple (shown as USD in the tooltip), Usage = warm amber
 // (x402 calls). Responsive via viewBox + preserveAspectRatio="none"; strokes stay
@@ -49,7 +49,7 @@ export function AreaChart({
   const active = hover != null && hover < n ? hover : null;
 
   // Spend (ALGO) and usage (calls) differ by orders of magnitude, so each series
-  // maps to its own vertical scale — both lines fill the height and stay legible.
+  // maps to its own vertical scale -- both lines fill the height and stay legible.
   const maxSpend = Math.max(1e-9, ...data.map((d) => d.x402Algo + d.llmAlgo));
   const maxCalls = Math.max(1e-9, ...data.map((d) => d.calls));
   const x = (i: number) =>

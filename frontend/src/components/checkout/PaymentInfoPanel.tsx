@@ -2,21 +2,35 @@
 import { useState } from "react";
 import { Pill } from "@/components/ui";
 import type { PaymentMethod } from "./types";
-import { PAYMENT_PROVIDERS } from "./paymentProviders";
+import {
+  USD_PROVIDERS,
+  MIN_CRYPTO_AMOUNT_USD_CENTS,
+  MAX_CRYPTO_AMOUNT_USD_CENTS,
+} from "./paymentProviders";
+import { usePaymentProviders } from "./usePaymentProviders";
+import { payments } from "@/lib/api";
 import { useCashfreeCheckout } from "./useCashfreeCheckout";
 
 type PayStatus = "idle" | "processing" | "success";
 
 const PHONE_STORAGE_KEY = "agentmesh_checkout_phone";
 
-// normalizePhone mirrors the backend's normalizeIndianPhone (payments.go) —
-// strips formatting and an optional country code down to the bare 10 digits
-// Cashfree expects. This copy only gates the Pay button early and shows a
-// friendly hint; the server validates again and is the actual authority.
-function normalizePhone(raw: string): string | null {
+// toLocalDigits reduces anything a user can type or paste to at most the 10
+// local digits. Formatting is dropped, and a leading 0 or +91 country code is
+// peeled off BEFORE the truncation so pasting "+91 98765 43210" keeps the
+// subscriber number rather than being cut down to "9198765432".
+function toLocalDigits(raw: string): string {
   let digits = raw.replace(/\D/g, "");
-  digits = digits.replace(/^0/, "");
-  if (digits.length === 12 && digits.startsWith("91")) digits = digits.slice(2);
+  digits = digits.replace(/^0+/, "");
+  if (digits.length > 10 && digits.startsWith("91")) digits = digits.slice(2);
+  return digits.slice(0, 10);
+}
+
+// normalizePhone mirrors the backend's normalizeIndianPhone (payments.go).
+// The field now only ever holds 10 bare digits, so this just checks the
+// mobile prefix. The server validates again and is the actual authority.
+function normalizePhone(raw: string): string | null {
+  const digits = toLocalDigits(raw);
   return /^[6-9]\d{9}$/.test(digits) ? digits : null;
 }
 
@@ -24,8 +38,11 @@ const PANEL_CSS = `
 .checkout-pay { transition: background 0.18s var(--ease), transform 0.12s var(--ease); }
 .checkout-pay:not(:disabled):active { transform: scale(0.985); }
 .checkout-provider { transition: border-color 0.15s var(--ease), background 0.15s var(--ease); }
-.checkout-agree { transition: border-color 0.15s var(--ease), background 0.15s var(--ease); cursor: pointer; }
-.checkout-agree:hover { border-color: var(--accent-line) !important; }
+/* The row is not clickable -- only the box inside it is -- so the pointer
+   cursor and hover affordance belong to the box, not the whole strip. */
+.checkout-agree { transition: border-color 0.15s var(--ease), background 0.15s var(--ease); }
+.checkout-agree:focus-within { border-color: var(--accent-line) !important; }
+.checkout-agree-box:hover span { border-color: var(--accent) !important; }
 @media (prefers-reduced-motion: reduce) {
   .checkout-pay, .checkout-provider { transition: none; }
 }
@@ -59,17 +76,17 @@ export function PaymentInfoPanel({
   const [phone, setPhone] = useState(() =>
     typeof window === "undefined"
       ? ""
-      : (window.localStorage.getItem(PHONE_STORAGE_KEY) ?? ""),
+      : toLocalDigits(window.localStorage.getItem(PHONE_STORAGE_KEY) ?? ""),
   );
   const [phoneTouched, setPhoneTouched] = useState(false);
   const normalizedPhone = normalizePhone(phone);
   const phoneValid = normalizedPhone !== null;
 
   const handlePhoneChange = (value: string) => {
-    setPhone(value);
-    if (typeof window !== "undefined") {
-      const n = normalizePhone(value);
-      if (n) window.localStorage.setItem(PHONE_STORAGE_KEY, value);
+    const digits = toLocalDigits(value);
+    setPhone(digits);
+    if (typeof window !== "undefined" && normalizePhone(digits)) {
+      window.localStorage.setItem(PHONE_STORAGE_KEY, digits);
     }
   };
 
@@ -87,8 +104,24 @@ export function PaymentInfoPanel({
     onDismiss: () => setStatus("idle"),
   });
 
-  const selected = PAYMENT_PROVIDERS.find((p) => p.id === method);
-  const busy = status === "processing" || cashfree.loading;
+  const { providers, usdPerINR, loading: providersLoading } =
+    usePaymentProviders();
+  const selected = providers.find((p) => p.id === method);
+
+  // NOWPayments charges in dollars while this panel is denominated in rupees,
+  // so the amount is converted at the server's live rate -- never at
+  // lib/credits/fx.ts's mock constant, which would quote a price that differs
+  // from what actually gets charged.
+  const amountUSDCents =
+    usdPerINR > 0 ? Math.round(amountINR * usdPerINR * 100) : 0;
+  const isUSD = USD_PROVIDERS.has(method);
+  // Cashfree's own default is available before the providers fetch resolves
+  // (see usePaymentProviders), so only a USD gateway -- which needs that
+  // fetch's rate to even price itself -- should block on it.
+  const busy =
+    status === "processing" ||
+    cashfree.loading ||
+    (isUSD && providersLoading);
   const isSuccess = status === "success";
   // Cashfree specifically needs a real phone; other providers don't ask for
   // one, so this gate only applies when that method is selected.
@@ -98,11 +131,21 @@ export function PaymentInfoPanel({
     !busy &&
     !isSuccess &&
     agreed &&
-    (method !== "cashfree" || phoneValid);
+    (method !== "cashfree" || phoneValid) &&
+    // A USD gateway with no rate cannot be priced, and outside the server's
+    // own min/max it would only 400 at invoice creation.
+    (!isUSD ||
+      (amountUSDCents >= MIN_CRYPTO_AMOUNT_USD_CENTS &&
+        amountUSDCents <= MAX_CRYPTO_AMOUNT_USD_CENTS));
 
-  const handlePay = () => {
+  // Cashfree completes in-page via its own JS SDK. NOWPayments is a redirect:
+  // the browser leaves for the hosted invoice and returns to /billing, where
+  // the query param is picked up. There is no client-side completion for
+  // crypto -- the IPN webhook is what credits it.
+  const handlePay = async () => {
     if (!canPay) return;
     setError(null);
+
     if (method === "cashfree") {
       if (!normalizedPhone) {
         setPhoneTouched(true);
@@ -111,6 +154,16 @@ export function PaymentInfoPanel({
       // useCashfreeCheckout owns loading/dismiss; leave status idle so the
       // button reflects the hook's state, not a stuck "processing".
       cashfree.pay(Math.round(amountINR * 100), normalizedPhone);
+      return;
+    }
+
+    setStatus("processing");
+    try {
+      const res = await payments.createCryptoInvoice(amountUSDCents);
+      window.location.assign(res.invoice_url);
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : "could not start checkout");
+      setStatus("idle");
     }
   };
 
@@ -118,11 +171,13 @@ export function PaymentInfoPanel({
     ? "✓ Payment successful"
     : busy
       ? "Processing…"
-      : payable
-        ? `Pay ₹${amountINR.toFixed(2)}`
-        : "Add an amount to continue";
+      : !payable
+        ? "Add an amount to continue"
+        : isUSD
+          ? `Pay $${(amountUSDCents / 100).toFixed(2)}`
+          : `Pay ₹${amountINR.toFixed(2)}`;
 
-  const trust = "Secured by Cashfree · details are encrypted";
+  const trust = `Secured by ${selected?.label ?? "our payment provider"} · details are encrypted`;
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
@@ -137,7 +192,7 @@ export function PaymentInfoPanel({
         aria-label="Payment method"
         style={{ display: "flex", flexDirection: "column", gap: 10 }}
       >
-        {PAYMENT_PROVIDERS.map((p) => {
+        {providers.map((p) => {
           const active = method === p.id;
           const disabled = !p.enabled;
           return (
@@ -190,7 +245,9 @@ export function PaymentInfoPanel({
                   />
                 )}
               </span>
-              <span style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+              <span
+                style={{ display: "flex", flexDirection: "column", gap: 2 }}
+              >
                 <span style={{ fontSize: 13, fontWeight: 500 }}>{p.label}</span>
                 <span style={{ fontSize: 11, color: "var(--fg-dim)" }}>
                   {p.sublabel}
@@ -221,7 +278,8 @@ export function PaymentInfoPanel({
             type="tel"
             inputMode="numeric"
             autoComplete="tel"
-            placeholder="98765 43210"
+            maxLength={10}
+            placeholder="9876543210"
             value={phone}
             onChange={(e) => handlePhoneChange(e.target.value)}
             onBlur={() => setPhoneTouched(true)}
@@ -231,9 +289,7 @@ export function PaymentInfoPanel({
               padding: "0 12px",
               borderRadius: "var(--r-2)",
               border: `1px solid ${
-                phoneTouched && !phoneValid
-                  ? "var(--danger)"
-                  : "var(--border)"
+                phoneTouched && !phoneValid ? "var(--danger)" : "var(--border)"
               }`,
               background: "var(--bg)",
               color: "var(--fg)",
@@ -268,9 +324,27 @@ export function PaymentInfoPanel({
             fontSize: 12,
           }}
         >
-          <svg width="12" height="12" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-            <rect x="3" y="7" width="10" height="7" rx="1.5" stroke="currentColor" strokeWidth="1.3" />
-            <path d="M5 7V5a3 3 0 0 1 6 0v2" stroke="currentColor" strokeWidth="1.3" />
+          <svg
+            width="12"
+            height="12"
+            viewBox="0 0 16 16"
+            fill="none"
+            aria-hidden="true"
+          >
+            <rect
+              x="3"
+              y="7"
+              width="10"
+              height="7"
+              rx="1.5"
+              stroke="currentColor"
+              strokeWidth="1.3"
+            />
+            <path
+              d="M5 7V5a3 3 0 0 1 6 0v2"
+              stroke="currentColor"
+              strokeWidth="1.3"
+            />
           </svg>
           {trust}
         </div>
@@ -299,7 +373,7 @@ export function PaymentInfoPanel({
 
         {/* ── Compliance checkbox ── */}
         {!isSuccess && (
-          <label
+          <div
             className="checkout-agree"
             style={{
               display: "flex",
@@ -312,43 +386,85 @@ export function PaymentInfoPanel({
               background: agreed ? "var(--bg-elev-1)" : "transparent",
             }}
           >
-            {/* Custom checkbox */}
-            <span
-              aria-hidden
-              onClick={() => setAgreed((v) => !v)}
+            {/* Only the box toggles. The <label> wraps the box alone rather than
+                the whole row, so clicking (or dragging across) the disclosure
+                text can't flip an agreement the user was only trying to read. */}
+            <label
+              className="checkout-agree-box"
               style={{
+                display: "inline-flex",
                 flexShrink: 0,
                 marginTop: 1,
-                width: 15,
-                height: 15,
-                borderRadius: 4,
-                border: `1.5px solid ${agreed ? "var(--accent)" : "var(--border-strong)"}`,
-                background: agreed ? "var(--accent)" : "transparent",
-                display: "inline-flex",
-                alignItems: "center",
-                justifyContent: "center",
-                transition: "background 0.15s, border-color 0.15s",
+                cursor: "pointer",
               }}
             >
-              {agreed && (
-                <svg width="9" height="7" viewBox="0 0 9 7" fill="none" aria-hidden="true">
-                  <path d="M1 3.5L3.5 6L8 1" stroke="var(--accent-fg)" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
-                </svg>
-              )}
-            </span>
-            <input
-              type="checkbox"
-              checked={agreed}
-              onChange={(e) => setAgreed(e.target.checked)}
-              style={{ position: "absolute", opacity: 0, width: 0, height: 0, pointerEvents: "none" }}
-              aria-label="I understand that AgentMesh credits are non-refundable and hold no monetary value"
-            />
-            <span style={{ fontSize: 11.5, lineHeight: 1.6, color: "var(--fg-muted)" }}>
+              <span
+                aria-hidden
+                style={{
+                  width: 15,
+                  height: 15,
+                  borderRadius: 4,
+                  border: `1.5px solid ${agreed ? "var(--accent)" : "var(--border-strong)"}`,
+                  background: agreed ? "var(--accent)" : "transparent",
+                  display: "inline-flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  transition: "background 0.15s, border-color 0.15s",
+                }}
+              >
+                {agreed && (
+                  <svg
+                    width="9"
+                    height="7"
+                    viewBox="0 0 9 7"
+                    fill="none"
+                    aria-hidden="true"
+                  >
+                    <path
+                      d="M1 3.5L3.5 6L8 1"
+                      stroke="var(--accent-fg)"
+                      strokeWidth="1.6"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                    />
+                  </svg>
+                )}
+              </span>
+              <input
+                type="checkbox"
+                checked={agreed}
+                onChange={(e) => setAgreed(e.target.checked)}
+                style={{
+                  position: "absolute",
+                  opacity: 0,
+                  width: 0,
+                  height: 0,
+                  pointerEvents: "none",
+                }}
+                aria-label="I understand that AgentMesh credits are non-refundable and hold no monetary value"
+              />
+            </label>
+            {/* Not selectable: dragging over this text used to leave a
+                highlighted word mid-sentence. The Terms/Refund Policy links
+                stay clickable. */}
+            <span
+              style={{
+                fontSize: 11.5,
+                lineHeight: 1.6,
+                color: "var(--fg-muted)",
+                userSelect: "none",
+                WebkitUserSelect: "none",
+              }}
+            >
               I understand that AgentMesh credits are{" "}
-              <strong style={{ color: "var(--fg)", fontWeight: 600 }}>non-refundable</strong>{" "}
+              <strong style={{ color: "var(--fg)", fontWeight: 600 }}>
+                non-refundable
+              </strong>{" "}
               once purchased and hold{" "}
-              <strong style={{ color: "var(--fg)", fontWeight: 600 }}>no monetary or cash value</strong>.
-              {" "}By proceeding I agree to the{" "}
+              <strong style={{ color: "var(--fg)", fontWeight: 600 }}>
+                no monetary or cash value
+              </strong>
+              . By proceeding I agree to the{" "}
               <a
                 href="/terms"
                 target="_blank"
@@ -357,8 +473,8 @@ export function PaymentInfoPanel({
                 style={{ color: "var(--accent)", textDecoration: "none" }}
               >
                 Terms
-              </a>
-              {" "}&amp;{" "}
+              </a>{" "}
+              &amp;{" "}
               <a
                 href="/refund-policy"
                 target="_blank"
@@ -367,26 +483,47 @@ export function PaymentInfoPanel({
                 style={{ color: "var(--accent)", textDecoration: "none" }}
               >
                 Refund Policy
-              </a>.
+              </a>
+              .
             </span>
-          </label>
+          </div>
         )}
 
         {error && (
-          <p style={{ margin: "10px 0 0", fontSize: 12, color: "var(--danger)", textAlign: "center" }}>
+          <p
+            style={{
+              margin: "10px 0 0",
+              fontSize: 12,
+              color: "var(--danger)",
+              textAlign: "center",
+            }}
+          >
             {error}
           </p>
         )}
 
         {!error && !busy && !isSuccess && (
-          <p style={{ margin: "10px 0 0", fontSize: 12, color: "var(--fg-dim)", textAlign: "center" }}>
+          <p
+            style={{
+              margin: "10px 0 0",
+              fontSize: 12,
+              color: "var(--fg-dim)",
+              textAlign: "center",
+            }}
+          >
             {!payable
               ? "Your cart is empty."
               : method === "cashfree" && !phoneValid
                 ? "Enter your phone number above to continue."
-                : !agreed
-                  ? "Please confirm the credit policy above to continue."
-                  : `You'll be redirected to ${selected?.label ?? "the provider"} to complete payment.`}
+                : isUSD &&
+                    amountUSDCents > 0 &&
+                    amountUSDCents < MIN_CRYPTO_AMOUNT_USD_CENTS
+                  ? `Minimum $${(MIN_CRYPTO_AMOUNT_USD_CENTS / 100).toFixed(2)} for crypto payments.`
+                  : isUSD && amountUSDCents > MAX_CRYPTO_AMOUNT_USD_CENTS
+                    ? `Maximum $${(MAX_CRYPTO_AMOUNT_USD_CENTS / 100).toFixed(2)} for crypto payments.`
+                    : !agreed
+                    ? "Please confirm the credit policy above to continue."
+                    : `You'll be redirected to ${selected?.label ?? "the provider"} to complete payment.`}
           </p>
         )}
       </div>

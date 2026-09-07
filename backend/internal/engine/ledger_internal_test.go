@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/agentmesh/backend/internal/db"
+	"github.com/agentmesh/backend/internal/engine/nodes"
 	"github.com/agentmesh/backend/internal/models"
 	"github.com/agentmesh/backend/internal/sse"
 	"github.com/agentmesh/backend/internal/x402"
@@ -65,7 +66,7 @@ func TestPaymentLedgerCommitAndReleaseSurviveCancelledContext(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	r := NewRunner(store, sse.NewBroker(), nil, "", "", X402Config{USDCAssetID: 10458941})
+	r := NewRunner(store, sse.NewBroker(), nil, "", "", "", X402Config{USDCAssetID: 10458941})
 	ledger := r.newPaymentLedger(wf, run)
 
 	if err := ledger.Reserve(context.Background(), 250_000); err != nil {
@@ -159,7 +160,7 @@ func TestRecordRunFundedSettlementSurvivesCancelledContext(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	r := NewRunner(store, sse.NewBroker(), &fakeUSDCSignerForLedgerTest{}, "http://localhost:65535", "platform-spend-enc-mnemonic", X402Config{USDCAssetID: 10458941})
+	r := NewRunner(store, sse.NewBroker(), &fakeUSDCSignerForLedgerTest{}, "http://localhost:65535", "platform-spend-enc-mnemonic", "", X402Config{USDCAssetID: 10458941})
 
 	recordSettlement := r.newRecordSettlement(wf, run, funding.ID)
 
@@ -192,6 +193,23 @@ func (f *fakeUSDCSignerForLedgerTest) SignAndSendPayment(_ context.Context, _, _
 func (f *fakeUSDCSignerForLedgerTest) SignUSDCPaymentGroup(_ context.Context, _, _ string, _, _ uint64, _ string) ([]string, int, error) {
 	return []string{"g0", "g1"}, 0, nil
 }
+
+// SignUSDCPaymentSingle must also be implemented -- see fakeRelaySigner's
+// identical doc comment in runner_stop_test.go for why a missing method
+// here silently degrades every test using this fake to the no-fund path.
+func (f *fakeUSDCSignerForLedgerTest) SignUSDCPaymentSingle(_ context.Context, _, _ string, _, _ uint64) ([]string, int, error) {
+	return []string{"g0"}, 0, nil
+}
+
+// Compile-time proof that this double really does satisfy the interface its
+// doc comment claims. reserveAndFundRun reaches its signer via
+// `x, _ := r.walletSvc.(nodes.USDCGroupSigner)`, which discards the ok and
+// degrades to the no-funding path when the assertion fails -- so a double
+// that has fallen behind the interface does not fail to compile, it
+// silently turns every run-funding assertion here into a no-op. That is
+// exactly what happened when SignUSDCPaymentSingle was added to
+// USDCGroupSigner and this double was not updated with it.
+var _ nodes.USDCGroupSigner = (*fakeUSDCSignerForLedgerTest)(nil)
 
 // TestReserveAndFundRunFailsRatherThanSilentlyDegradingWhenRecordRunFundingFails
 // is a white-box regression test for the exact bug this branch's final
@@ -247,8 +265,13 @@ func TestReserveAndFundRunFailsRatherThanSilentlyDegradingWhenRecordRunFundingFa
 	if err != nil {
 		t.Fatal(err)
 	}
+	// 2500000 micros: comfortably covers the credit reservation this test
+	// needs to get past (300000 real vendor cost + the platform's flat
+	// markup, models.X402PlatformFeeUSDMicros) so reserveAndFundRun reaches
+	// FundRunReserve/RecordRunFunding -- the actual thing under test -- and
+	// doesn't just fail earlier at ReserveCredits from being underfunded.
 	orderID := fmt.Sprintf("fund_%s_%d", user.ID, time.Now().UnixNano())
-	if _, err := store.CreateCreditTransaction(context.Background(), user.ID, orderID, 100, 1.0); err != nil {
+	if _, err := store.CreateCreditTransaction(context.Background(), user.ID, orderID, 250, 1.0); err != nil {
 		t.Fatal(err)
 	}
 	if _, _, err := store.CompleteCreditTransaction(context.Background(), "cashfree", orderID, "pay_"+orderID); err != nil {
@@ -270,7 +293,7 @@ func TestReserveAndFundRunFailsRatherThanSilentlyDegradingWhenRecordRunFundingFa
 		t.Fatal(err)
 	}
 
-	r := NewRunner(store, sse.NewBroker(), &fakeUSDCSignerForLedgerTest{}, "http://localhost:65535", "platform-spend-enc-mnemonic", X402Config{
+	r := NewRunner(store, sse.NewBroker(), &fakeUSDCSignerForLedgerTest{}, "http://localhost:65535", "platform-spend-enc-mnemonic", "", X402Config{
 		USDCAssetID:               10458941,
 		PlatformWalletAddress:     "PLATFORMADDR",
 		PlatformWalletEncMnemonic: "platform-wallet-enc-mnemonic",
@@ -293,8 +316,9 @@ func TestReserveAndFundRunFailsRatherThanSilentlyDegradingWhenRecordRunFundingFa
 	if err != nil {
 		t.Fatal(err)
 	}
-	if balance != 700000 {
-		t.Fatalf("want the 300000 reservation to remain deducted, NOT released (real money already settled on-chain), got balance %d (started at 1000000)", balance)
+	wantBalance := int64(2_500_000 - 300_000 - models.X402PlatformFeeUSDMicros)
+	if balance != wantBalance {
+		t.Fatalf("want the 300000+markup reservation to remain deducted, NOT released (real money already settled on-chain), got balance %d (want %d, started at 2500000)", balance, wantBalance)
 	}
 }
 
@@ -419,7 +443,7 @@ func TestReserveAndFundRunRejectsOutOfRangeQuote(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	r := NewRunner(store, sse.NewBroker(), &fakeUSDCSignerForLedgerTest{}, "http://localhost:65535", "platform-spend-enc-mnemonic", X402Config{
+	r := NewRunner(store, sse.NewBroker(), &fakeUSDCSignerForLedgerTest{}, "http://localhost:65535", "platform-spend-enc-mnemonic", "", X402Config{
 		USDCAssetID:               10458941,
 		PlatformWalletAddress:     "PLATFORMADDR",
 		PlatformWalletEncMnemonic: "platform-wallet-enc-mnemonic",
@@ -467,7 +491,7 @@ func TestReserveAndFundRunRejectsOutOfRangeQuoteNoDatabase(t *testing.T) {
 	}))
 	defer facilitator.Close()
 
-	r := NewRunner(nil, sse.NewBroker(), &fakeUSDCSignerForLedgerTest{}, "http://localhost:65535", "platform-spend-enc-mnemonic", X402Config{
+	r := NewRunner(nil, sse.NewBroker(), &fakeUSDCSignerForLedgerTest{}, "http://localhost:65535", "platform-spend-enc-mnemonic", "", X402Config{
 		USDCAssetID:               10458941,
 		PlatformWalletAddress:     "PLATFORMADDR",
 		PlatformWalletEncMnemonic: "platform-wallet-enc-mnemonic",
@@ -544,8 +568,12 @@ func TestReserveAndFundRunHoldsReservationOnIndeterminateSettle(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// 2500000 micros: comfortably covers the credit reservation this test
+	// needs to get past (300000 real vendor cost + the platform's flat
+	// markup) so reserveAndFundRun reaches FundRunReserve -- see the
+	// identical comment in TestReserveAndFundRunFailsRatherThan... above.
 	orderID := fmt.Sprintf("fund_%s_%d", user.ID, time.Now().UnixNano())
-	if _, err := store.CreateCreditTransaction(context.Background(), user.ID, orderID, 100, 1.0); err != nil {
+	if _, err := store.CreateCreditTransaction(context.Background(), user.ID, orderID, 250, 1.0); err != nil {
 		t.Fatal(err)
 	}
 	if _, _, err := store.CompleteCreditTransaction(context.Background(), "cashfree", orderID, "pay_"+orderID); err != nil {
@@ -563,7 +591,7 @@ func TestReserveAndFundRunHoldsReservationOnIndeterminateSettle(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	r := NewRunner(store, sse.NewBroker(), &fakeUSDCSignerForLedgerTest{}, "http://localhost:65535", "platform-spend-enc-mnemonic", X402Config{
+	r := NewRunner(store, sse.NewBroker(), &fakeUSDCSignerForLedgerTest{}, "http://localhost:65535", "platform-spend-enc-mnemonic", "", X402Config{
 		USDCAssetID:               10458941,
 		PlatformWalletAddress:     "PLATFORMADDR",
 		PlatformWalletEncMnemonic: "platform-wallet-enc-mnemonic",
@@ -586,8 +614,9 @@ func TestReserveAndFundRunHoldsReservationOnIndeterminateSettle(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if balance != 700000 {
-		t.Fatalf("want the 300000 reservation to remain deducted, NOT released (settlement's fate is unknown, not confirmed failed), got balance %d (started at 1000000)", balance)
+	wantBalance := int64(2_500_000 - 300_000 - models.X402PlatformFeeUSDMicros)
+	if balance != wantBalance {
+		t.Fatalf("want the 300000+markup reservation to remain deducted, NOT released (settlement's fate is unknown, not confirmed failed), got balance %d (want %d, started at 2500000)", balance, wantBalance)
 	}
 }
 
@@ -645,7 +674,7 @@ func TestReserveAndFundRunDegradesGracefullyWithNilFacilitator(t *testing.T) {
 	// (both already-checked fields), but FacilitatorClient left nil and
 	// PlatformWalletAddress left empty -- the two fields the existing guard
 	// doesn't check.
-	r := NewRunner(store, sse.NewBroker(), &fakeUSDCSignerForLedgerTest{}, "http://localhost:65535", "platform-spend-enc-mnemonic", X402Config{
+	r := NewRunner(store, sse.NewBroker(), &fakeUSDCSignerForLedgerTest{}, "http://localhost:65535", "platform-spend-enc-mnemonic", "", X402Config{
 		USDCAssetID: 10458941,
 	})
 
@@ -669,5 +698,79 @@ func TestReserveAndFundRunDegradesGracefullyWithNilFacilitator(t *testing.T) {
 	}
 	if balance != 1000000 {
 		t.Fatalf("want balance untouched at 1000000 (degraded before ReserveCredits), got %d", balance)
+	}
+}
+
+// TestIsPaymentRiskClassifiesEveryMoneyAlreadyMovedError is a regression
+// test for a review finding: the dead-letter PaymentRisk classification
+// used to check only *nodes.ErrBalanceBlocked, missing two other error
+// shapes that also mean real money may already have moved for this
+// attempt -- nodes.ErrSettlementIndeterminate (the run-level pre-fund
+// settle response lost before any node started) and the newer
+// *nodes.ErrPaymentAlreadyCommitted (a tool402 call that signed and sent a
+// real payment before a downstream failure). Exercised directly against
+// the classification functions rather than through a full run: building an
+// end-to-end fixture for each of these three failure shapes (agent balance
+// block, run-level pre-fund indeterminate settle, standalone tool402
+// post-payment rejection) would mostly re-test wiring these functions
+// don't touch; what actually changed is the classification logic itself.
+func TestIsPaymentRiskClassifiesEveryMoneyAlreadyMovedError(t *testing.T) {
+	balanceBlocked := &nodes.ErrBalanceBlocked{Err: errors.New("insufficient balance")}
+	settlementIndeterminate := fmt.Errorf("x402 run funding: settlement indeterminate: %w", nodes.ErrSettlementIndeterminate)
+	paymentAlreadyCommitted := &nodes.ErrPaymentAlreadyCommitted{Err: errors.New("target rejected the paid request")}
+	unrelated := errors.New("LLM connectivity error")
+
+	cases := []struct {
+		name             string
+		err              error
+		wantAgentFeeOwed bool
+		wantPaymentRisk  bool
+	}{
+		{"ErrBalanceBlocked", balanceBlocked, true, true},
+		{"ErrPaymentAlreadyCommitted", paymentAlreadyCommitted, true, true},
+		{"ErrSettlementIndeterminate", settlementIndeterminate, false, true},
+		{"unrelated error", unrelated, false, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := isAgentFeeOwedDespiteFailure(tc.err); got != tc.wantAgentFeeOwed {
+				t.Errorf("isAgentFeeOwedDespiteFailure(%v) = %v, want %v", tc.err, got, tc.wantAgentFeeOwed)
+			}
+			if got := isPaymentRisk(tc.err); got != tc.wantPaymentRisk {
+				t.Errorf("isPaymentRisk(%v) = %v, want %v", tc.err, got, tc.wantPaymentRisk)
+			}
+		})
+	}
+}
+
+// hypotheticalFutureAgentFeeOwedError stands in for a payment-adjacent
+// error type that doesn't exist yet -- e.g. a future Tendril-lease-charged
+// failure occurring mid-agent-turn -- to prove
+// isAgentFeeOwedDespiteFailure/isPaymentRisk actually dispatch on the
+// nodes.AgentFeeOwedError INTERFACE, not a hand-maintained list of the two
+// concrete types that happen to exist today. A type genuinely new to this
+// test file, implementing nothing but the interface, must still classify
+// as true here with zero changes to runner.go's classification functions.
+type hypotheticalFutureAgentFeeOwedError struct{ msg string }
+
+func (e *hypotheticalFutureAgentFeeOwedError) Error() string { return e.msg }
+func (e *hypotheticalFutureAgentFeeOwedError) AgentFeeOwed() {}
+
+var _ nodes.AgentFeeOwedError = (*hypotheticalFutureAgentFeeOwedError)(nil)
+
+func TestIsPaymentRiskRecognizesAnyFutureAgentFeeOwedImplementation(t *testing.T) {
+	err := &hypotheticalFutureAgentFeeOwedError{msg: "a future payment-adjacent failure this test file invented"}
+	if !isAgentFeeOwedDespiteFailure(err) {
+		t.Error("isAgentFeeOwedDespiteFailure must recognize ANY type implementing nodes.AgentFeeOwedError, not just the two that exist today -- got false for a novel implementation")
+	}
+	if !isPaymentRisk(err) {
+		t.Error("isPaymentRisk must recognize ANY type implementing nodes.AgentFeeOwedError -- got false for a novel implementation")
+	}
+	// Wrapped (e.g. via fmt.Errorf("...: %w", err)) must still classify --
+	// errors.As walks Unwrap(), matching how these errors actually reach
+	// runner.go's dead-letter classification in practice.
+	wrapped := fmt.Errorf("node execution failed: %w", err)
+	if !isPaymentRisk(wrapped) {
+		t.Error("isPaymentRisk must see through fmt.Errorf(\"...: %w\", err) wrapping to a novel AgentFeeOwedError implementation")
 	}
 }

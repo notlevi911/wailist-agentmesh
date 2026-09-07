@@ -99,6 +99,31 @@ func TestGitHubAction_SkipsWhenRepoInvalid(t *testing.T) {
 	}
 }
 
+func TestGitHubAction_PrefersOAuthTokenOverManualToken(t *testing.T) {
+	var gotAuth string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotAuth = r.Header.Get("Authorization")
+		w.WriteHeader(http.StatusCreated)
+	}))
+	defer srv.Close()
+	nodes.SetGitHubAPIBaseForTest(srv.URL)
+	defer nodes.SetGitHubAPIBaseForTest("")
+
+	node := models.WorkflowNode{
+		ID: "gh5", Type: models.NodeTypeAction, Template: "github",
+		Secrets: map[string]string{"githubToken": "manual-pat-token", "githubOAuthAccessToken": "oauth-derived-token"},
+		Config:  map[string]string{"githubRepo": "owner/repo"},
+	}
+	rc := engine.NewRunContext("r1", []byte(`"test issue body"`))
+	_, err := nodes.ExecuteAction(context.Background(), node, rc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotAuth != "Bearer oauth-derived-token" {
+		t.Errorf("want OAuth token in Authorization header, got %q", gotAuth)
+	}
+}
+
 func TestGitHubAction_EscapesExtraPathSegments(t *testing.T) {
 	var gotPath string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -235,6 +260,78 @@ func TestJiraAction_SkipsWhenDomainInvalid(t *testing.T) {
 	}
 }
 
+func TestJiraAction_OAuthTokenUsesCloudIDURLAndBearerAuth(t *testing.T) {
+	var gotPath, gotAuth string
+	var gotBody map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		gotAuth = r.Header.Get("Authorization")
+		json.NewDecoder(r.Body).Decode(&gotBody)
+		w.WriteHeader(http.StatusCreated)
+	}))
+	defer srv.Close()
+	nodes.SetJiraAPIBaseForTest(srv.URL)
+	defer nodes.SetJiraAPIBaseForTest("")
+
+	node := models.WorkflowNode{
+		ID: "jr5", Type: models.NodeTypeAction, Template: "jira",
+		Secrets: map[string]string{"jiraOAuthAccessToken": "oauth-derived-token", "jiraAPIToken": "manual-token-should-be-ignored"},
+		Config: map[string]string{
+			"jiraOAuthCloudID": "cloud-xyz", "jiraProjectKey": "ENG",
+		},
+	}
+	rc := engine.NewRunContext("r1", []byte(`"deploy failed"`))
+	result, err := nodes.ExecuteAction(context.Background(), node, rc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result != "jira_issue_created" {
+		t.Errorf("want 'jira_issue_created', got %v", result)
+	}
+	if gotPath != "/rest/api/3/issue" {
+		t.Errorf("want issue path, got %q", gotPath)
+	}
+	if gotAuth != "Bearer oauth-derived-token" {
+		t.Errorf("want bearer auth with OAuth token, got %q", gotAuth)
+	}
+	fields, _ := gotBody["fields"].(map[string]any)
+	if fields["summary"] != "deploy failed" {
+		t.Errorf("want summary from message, got %v", fields)
+	}
+	project, _ := fields["project"].(map[string]any)
+	if project["key"] != "ENG" {
+		t.Errorf("want project key ENG, got %v", project)
+	}
+}
+
+func TestJiraAction_OAuthTokenSkipsWhenNoCloudID(t *testing.T) {
+	requestReceived := false
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requestReceived = true
+		w.WriteHeader(http.StatusCreated)
+	}))
+	defer srv.Close()
+	nodes.SetJiraAPIBaseForTest(srv.URL)
+	defer nodes.SetJiraAPIBaseForTest("")
+
+	node := models.WorkflowNode{
+		ID: "jr6", Type: models.NodeTypeAction, Template: "jira",
+		Secrets: map[string]string{"jiraOAuthAccessToken": "oauth-derived-token"},
+		Config:  map[string]string{"jiraProjectKey": "ENG"},
+	}
+	rc := engine.NewRunContext("r1", []byte(`"deploy failed"`))
+	result, err := nodes.ExecuteAction(context.Background(), node, rc)
+	if !errors.Is(err, nodes.ErrActionSkipped) {
+		t.Fatalf("want ErrActionSkipped, got %v", err)
+	}
+	if result != "jira_skipped_missing_config" {
+		t.Errorf("want 'jira_skipped_missing_config', got %v", result)
+	}
+	if requestReceived {
+		t.Error("expected no HTTP request to be dispatched without a cloudId")
+	}
+}
+
 func TestLinearAction_CreatesIssueViaGraphQL(t *testing.T) {
 	var gotAuth string
 	var gotBody map[string]any
@@ -346,6 +443,56 @@ func TestLinearAction_SkipsWhenNoTeamID(t *testing.T) {
 	}
 }
 
+func TestLinearAction_OAuthTokenUsesBearerAuthAndIsPreferredOverAPIKey(t *testing.T) {
+	var gotAuth string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotAuth = r.Header.Get("Authorization")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{"data":{"issueCreate":{"success":true}}}`))
+	}))
+	defer srv.Close()
+	nodes.SetLinearAPIBaseForTest(srv.URL)
+	defer nodes.SetLinearAPIBaseForTest("")
+
+	node := models.WorkflowNode{
+		ID: "li5", Type: models.NodeTypeAction, Template: "linear",
+		Secrets: map[string]string{"linearOAuthAccessToken": "oauth-derived-token", "linearAPIKey": "manual-key-should-be-ignored"},
+		Config:  map[string]string{"linearTeamID": "team123"},
+	}
+	rc := engine.NewRunContext("r1", []byte(`"flaky test in CI"`))
+	result, err := nodes.ExecuteAction(context.Background(), node, rc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result != "linear_issue_created" {
+		t.Errorf("want 'linear_issue_created', got %v", result)
+	}
+	if gotAuth != "Bearer oauth-derived-token" {
+		t.Errorf("want bearer auth with OAuth token, got %q", gotAuth)
+	}
+}
+
+func TestLinearAction_OAuthTokenFailsOnGraphQLErrors(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{"data":null,"errors":[{"message":"Entity not found: Team"}]}`))
+	}))
+	defer srv.Close()
+	nodes.SetLinearAPIBaseForTest(srv.URL)
+	defer nodes.SetLinearAPIBaseForTest("")
+
+	node := models.WorkflowNode{
+		ID: "li6", Type: models.NodeTypeAction, Template: "linear",
+		Secrets: map[string]string{"linearOAuthAccessToken": "oauth-derived-token"},
+		Config:  map[string]string{"linearTeamID": "bad-team"},
+	}
+	rc := engine.NewRunContext("r1", []byte(`"test message"`))
+	_, err := nodes.ExecuteAction(context.Background(), node, rc)
+	if err == nil {
+		t.Fatal("want error on GraphQL-level failure returned with HTTP 200 via the OAuth path, got nil")
+	}
+}
+
 func TestGitLabAction_CreatesIssue(t *testing.T) {
 	var gotPath, gotToken string
 	var gotBody map[string]any
@@ -415,6 +562,23 @@ func TestGitLabAction_SkipsWhenNoToken(t *testing.T) {
 	}
 }
 
+func TestGitLabAction_SkipsWhenNeitherTokenNorProjectID(t *testing.T) {
+	// Token presence must be checked before projectID (mirrors sendLinear),
+	// so a node missing everything reports the token gap, not the project
+	// gap — this pins the check ordering against regression.
+	node := models.WorkflowNode{
+		ID: "gl3b", Type: models.NodeTypeAction, Template: "gitlab",
+	}
+	rc := engine.NewRunContext("r1", []byte(`"pipeline broke"`))
+	result, err := nodes.ExecuteAction(context.Background(), node, rc)
+	if !errors.Is(err, nodes.ErrActionSkipped) {
+		t.Fatalf("want ErrActionSkipped, got %v", err)
+	}
+	if result != "gitlab_skipped_no_token" {
+		t.Errorf("want 'gitlab_skipped_no_token', got %v", result)
+	}
+}
+
 func TestGitLabAction_SkipsWhenNoProjectID(t *testing.T) {
 	node := models.WorkflowNode{
 		ID: "gl4", Type: models.NodeTypeAction, Template: "gitlab",
@@ -427,6 +591,114 @@ func TestGitLabAction_SkipsWhenNoProjectID(t *testing.T) {
 	}
 	if result != "gitlab_skipped_no_project_id" {
 		t.Errorf("want 'gitlab_skipped_no_project_id', got %v", result)
+	}
+}
+
+func TestGitLabAction_OAuthTokenUsesBearerAuthAndAlwaysTargetsGitLabCom(t *testing.T) {
+	var gotPath, gotAuth, gotPrivateToken string
+	var gotBody map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		gotAuth = r.Header.Get("Authorization")
+		gotPrivateToken = r.Header.Get("PRIVATE-TOKEN")
+		_ = json.NewDecoder(r.Body).Decode(&gotBody)
+		w.WriteHeader(http.StatusCreated)
+	}))
+	defer srv.Close()
+	nodes.SetGitLabOAuthAPIBaseForTest(srv.URL)
+	defer nodes.SetGitLabOAuthAPIBaseForTest("")
+
+	node := models.WorkflowNode{
+		ID: "gl5", Type: models.NodeTypeAction, Template: "gitlab",
+		Secrets: map[string]string{"gitlabOAuthAccessToken": "oauth-derived-token"},
+		// gitlabBaseURL deliberately points somewhere that would fail DNS
+		// resolution if the OAuth branch ever read it — a self-hosted-looking
+		// host has no bearing on where an OAuth-derived token (only ever valid
+		// against gitlab.com) can actually be used. Success here proves the
+		// OAuth branch never even looked at this value.
+		Config: map[string]string{"gitlabProjectID": "42", "gitlabBaseURL": "https://self-hosted.example.invalid"},
+	}
+	rc := engine.NewRunContext("r1", []byte(`"pipeline broke"`))
+	result, err := nodes.ExecuteAction(context.Background(), node, rc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result != "gitlab_issue_created" {
+		t.Errorf("want 'gitlab_issue_created', got %v", result)
+	}
+	if gotPath != "/api/v4/projects/42/issues" {
+		t.Errorf("want project issues path, got %q", gotPath)
+	}
+	if gotAuth != "Bearer oauth-derived-token" {
+		t.Errorf("want 'Authorization: Bearer <token>', got %q", gotAuth)
+	}
+	if gotPrivateToken != "" {
+		t.Errorf("want no PRIVATE-TOKEN header on the OAuth path, got %q", gotPrivateToken)
+	}
+	if gotBody["title"] != "pipeline broke" {
+		t.Errorf("want title in JSON body, got %v", gotBody)
+	}
+}
+
+func TestGitLabAction_OAuthTokenPreferredOverManualToken(t *testing.T) {
+	var gotAuth, gotPrivateToken string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotAuth = r.Header.Get("Authorization")
+		gotPrivateToken = r.Header.Get("PRIVATE-TOKEN")
+		w.WriteHeader(http.StatusCreated)
+	}))
+	defer srv.Close()
+	nodes.SetGitLabOAuthAPIBaseForTest(srv.URL)
+	defer nodes.SetGitLabOAuthAPIBaseForTest("")
+
+	node := models.WorkflowNode{
+		ID: "gl6", Type: models.NodeTypeAction, Template: "gitlab",
+		Secrets: map[string]string{"gitlabOAuthAccessToken": "oauth-derived-token", "gitlabAPIToken": "manual-token-should-be-ignored"},
+		Config:  map[string]string{"gitlabProjectID": "42"},
+	}
+	rc := engine.NewRunContext("r1", []byte(`"pipeline broke"`))
+	result, err := nodes.ExecuteAction(context.Background(), node, rc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result != "gitlab_issue_created" {
+		t.Errorf("want 'gitlab_issue_created', got %v", result)
+	}
+	if gotAuth != "Bearer oauth-derived-token" {
+		t.Errorf("want bearer auth with OAuth token, got %q", gotAuth)
+	}
+	if gotPrivateToken != "" {
+		t.Errorf("want no PRIVATE-TOKEN header when an OAuth token is present, got %q", gotPrivateToken)
+	}
+}
+
+func TestGitLabAction_ManualTokenUnaffectedByOAuthCodePath(t *testing.T) {
+	var gotPath, gotToken string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		gotToken = r.Header.Get("PRIVATE-TOKEN")
+		w.WriteHeader(http.StatusCreated)
+	}))
+	defer srv.Close()
+
+	node := models.WorkflowNode{
+		ID: "gl7", Type: models.NodeTypeAction, Template: "gitlab",
+		Secrets: map[string]string{"gitlabAPIToken": "glpat-xxx"},
+		Config:  map[string]string{"gitlabProjectID": "42", "gitlabBaseURL": srv.URL},
+	}
+	rc := engine.NewRunContext("r1", []byte(`"pipeline broke"`))
+	result, err := nodes.ExecuteAction(context.Background(), node, rc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result != "gitlab_issue_created" {
+		t.Errorf("want 'gitlab_issue_created', got %v", result)
+	}
+	if gotPath != "/api/v4/projects/42/issues" {
+		t.Errorf("want project issues path, got %q", gotPath)
+	}
+	if gotToken != "glpat-xxx" {
+		t.Errorf("want PRIVATE-TOKEN header still used and custom gitlabBaseURL still respected, got %q", gotToken)
 	}
 }
 

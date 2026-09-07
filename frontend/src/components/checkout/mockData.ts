@@ -21,6 +21,6 @@ export function computeTotals(items: CartItem[]): OrderTotals {
     (sum, item) => sum + item.unitPrice * item.quantity,
     0,
   );
-  // Digital credits: no shipping or discount lines — you pay the subtotal.
+  // Digital credits: no shipping or discount lines -- you pay the subtotal.
   return { subtotal, total: subtotal };
 }

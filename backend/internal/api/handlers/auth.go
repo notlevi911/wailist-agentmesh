@@ -41,6 +41,49 @@ func (d *Deps) setUICookie(w http.ResponseWriter) {
 	})
 }
 
+// NativeClientHeader lets a non-browser client ask for its session as a bearer
+// token instead of a cookie.
+//
+// The web app must keep using the HttpOnly cookie -- a token readable by page
+// JavaScript is strictly weaker, since XSS can exfiltrate it. But a Capacitor
+// WebView is not a browser tab: it runs on the https://localhost app origin,
+// so the cookie set on the API's own domain is third-party and Android's
+// WebView declines to send it by default. CORS_ORIGIN is a single origin too,
+// so the cookie path cannot serve both clients at once.
+//
+// NewAuthMiddleware has always accepted "Authorization: Bearer" for exactly
+// this kind of caller; the only thing missing was a way to obtain the token.
+// This grants no new authority -- it is the same JWT the cookie already
+// carries, with the same claims and lifetime -- it just hands it to a client
+// that cannot use cookies. The app is responsible for storing it in
+// Keystore-backed storage rather than anywhere a page can read it.
+// Exported because middleware.go's CORS allow-list needs the same literal: a
+// client cannot send a header the server's own CORS response doesn't permit,
+// so the two must never drift.
+const NativeClientHeader = "X-AgentMesh-Client"
+
+// wantsBearerToken reports whether this caller identified itself as a native
+// client. Opt-in by header rather than by user agent: a UA string is guessable
+// and spoofable, and more to the point it changes under us, whereas a header
+// our own app sets is an explicit request we control both ends of.
+func wantsBearerToken(r *http.Request) bool {
+	switch strings.ToLower(strings.TrimSpace(r.Header.Get(NativeClientHeader))) {
+	case "android", "ios":
+		return true
+	}
+	return false
+}
+
+// authPayload builds the sign-in/sign-up response body. The cookie is set for
+// every caller regardless; only a native client is additionally handed the raw
+// token, so the browser response is byte-identical to what it was before.
+func authPayload(r *http.Request, token string) map[string]any {
+	if wantsBearerToken(r) {
+		return map[string]any{"token": token}
+	}
+	return map[string]any{}
+}
+
 func (d *Deps) setAuthCookie(w http.ResponseWriter, token string) {
 	secure := strings.HasPrefix(os.Getenv("BASE_URL"), "https")
 	sameSite := http.SameSiteLaxMode
@@ -146,7 +189,7 @@ func (d *Deps) SignUp(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	d.setAuthCookie(w, token)
-	respond.JSON(w, http.StatusCreated, map[string]any{})
+	respond.JSON(w, http.StatusCreated, authPayload(r, token))
 }
 
 func (d *Deps) SignIn(w http.ResponseWriter, r *http.Request) {
@@ -178,7 +221,7 @@ func (d *Deps) SignIn(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	d.setAuthCookie(w, token)
-	respond.JSON(w, http.StatusOK, map[string]any{})
+	respond.JSON(w, http.StatusOK, authPayload(r, token))
 }
 
 func (d *Deps) SignOut(w http.ResponseWriter, r *http.Request) {

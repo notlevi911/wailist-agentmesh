@@ -1,19 +1,25 @@
 "use client";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { IconArrow, IconWallet } from "@/components/ui";
 import { Topbar } from "@/components/Topbar";
 import { PurchaseHistory } from "@/components/billing/PurchaseHistory";
 import { CheckoutModal } from "@/components/checkout/CheckoutModal";
 import { useCredits } from "@/lib/credits/store";
-import { bonusRate, creditsForTopup } from "@/lib/credits/fx";
+import {
+  bonusRate,
+  creditsForTopup,
+  maxTopupINR,
+  MAX_TOPUP_USD,
+} from "@/lib/credits/fx";
 import { credits as creditsApi } from "@/lib/api";
 
-const PRESETS_INR = [100, 500, 1000, 2000];
+const PRESETS_INR = [1000, 5000, 10000, 20000];
+const MAX_INR = maxTopupINR();
 const LOW_BALANCE_USD = 5;
 
 const HOW_IT_WORKS = [
   "Credits are spent as your agents call paid tools, x402 endpoints, and LLM providers.",
-  "Testnet usage is always free — you only pay for mainnet calls.",
+  "Testnet usage is always free. You only pay for mainnet calls.",
   "Top-ups of ₹1000 or more earn 5% bonus credits.",
   "Every purchase generates a printable receipt for your records.",
 ];
@@ -42,10 +48,59 @@ const panelStyle: React.CSSProperties = {
 const fmtUSD = (n: number) => `$${n.toFixed(2)}`;
 
 export default function BillingPage() {
-  const { balanceUSD, lastPurchase, refreshBalance } = useCredits();
+  const { balanceUSD, balanceKnown, lastPurchase, refreshBalance } =
+    useCredits();
   const [amountINR, setAmountINR] = useState<number>(PRESETS_INR[1]);
   const [customINR, setCustomINR] = useState("");
   const [checkoutOpen, setCheckoutOpen] = useState(false);
+
+  // Read the authoritative balance (users.credit_balance_usd_micros) every time
+  // this page is opened. The store keeps a cross-route copy in memory, but it
+  // goes stale the moment a run spends credits in another tab — and this is the
+  // page where the number has to be right.
+  useEffect(() => {
+    void refreshBalance();
+  }, [refreshBalance]);
+
+  // A crypto top-up sends the browser to NOWPayments and back. This closes out
+  // that round trip. Nothing is credited here -- the IPN webhook is the only
+  // path that grants credit -- so the message says the balance will follow
+  // rather than claiming success.
+  //
+  // Written as one asynchronous routine so the effect never sets state during
+  // its own render pass.
+  const [returnState, setReturnState] = useState<{
+    tone: "pending" | "error";
+    message: string;
+  } | null>(null);
+
+  useEffect(() => {
+    void (async () => {
+      const params = new URLSearchParams(window.location.search);
+      const outcome = params.get("crypto");
+      if (!outcome) return;
+
+      // Strip the param so a refresh doesn't re-run this.
+      const url = new URL(window.location.href);
+      url.searchParams.delete("crypto");
+      window.history.replaceState({}, "", url.toString());
+
+      if (outcome === "cancelled" || outcome === "canceled") {
+        setReturnState({ tone: "error", message: "Checkout was cancelled." });
+        return;
+      }
+      if (outcome !== "success") return;
+
+      setReturnState({
+        tone: "pending",
+        message:
+          "Payment submitted. Crypto settles on-chain, so your balance will update once it confirms.",
+      });
+      // The credit may already have landed while the payer was redirecting
+      // back, so it is worth one look rather than making them reload.
+      await refreshBalance();
+    })();
+  }, [refreshBalance]);
 
   const [couponCode, setCouponCode] = useState("");
   const [couponState, setCouponState] = useState<
@@ -63,14 +118,20 @@ export default function BillingPage() {
     if (!code || couponState === "loading") return;
     setCouponState("loading");
     try {
-      await creditsApi.redeemCoupon(code);
+      // The credited amount is whatever this code is configured for on the
+      // backend, so report what the server actually granted.
+      const { creditedUSD } = await creditsApi.redeemCoupon(code);
       await refreshBalance();
       setCouponState("success");
-      setCouponMessage("Coupon applied — $5 added to your balance.");
+      setCouponMessage(
+        `Coupon applied — ${fmtUSD(creditedUSD)} added to your balance.`,
+      );
       setCouponCode("");
     } catch (e) {
       setCouponState("error");
-      setCouponMessage(e instanceof Error ? e.message : "coupon redemption failed");
+      setCouponMessage(
+        e instanceof Error ? e.message : "coupon redemption failed",
+      );
     }
   };
 
@@ -80,15 +141,21 @@ export default function BillingPage() {
       ? parsedCustom
       : 0
     : amountINR;
-  const checkoutAmountINR = effectiveINR >= 1 ? effectiveINR : 0;
+  const overMax = effectiveINR > MAX_INR;
+  const checkoutAmountINR =
+    effectiveINR >= 1 && !overMax ? effectiveINR : 0;
   const canCheckout = checkoutAmountINR > 0;
   const credits = creditsForTopup(checkoutAmountINR);
-  const isLow = balanceUSD < LOW_BALANCE_USD;
+  // Only call a balance "low" once we've actually read it — before the first
+  // fetch lands, balanceUSD is 0 because nothing is known, not because the
+  // account is empty.
+  const isLow = balanceKnown && balanceUSD < LOW_BALANCE_USD;
 
   return (
     <div
+      className="am-viewport"
       style={{
-        height: "100vh",
+        height: "100dvh",
         display: "flex",
         flexDirection: "column",
         overflow: "hidden",
@@ -130,9 +197,37 @@ export default function BillingPage() {
               }}
             >
               Credits are spent as your agents call paid tools and models. Top
-              up anytime — testnet usage stays free.
+              up anytime; testnet usage stays free.
             </p>
           </div>
+
+          {/* Outcome of a redirect checkout, above the fold: the payer has just
+              come back from another site and the first thing they need is
+              whether it worked. */}
+          {returnState && (
+            <div
+              role="status"
+              style={{
+                marginTop: 18,
+                padding: "12px 14px",
+                borderRadius: "var(--r-2)",
+                fontSize: 13,
+                lineHeight: 1.5,
+                border: `1px solid ${
+                  returnState.tone === "error"
+                    ? "var(--danger)"
+                    : "var(--border)"
+                }`,
+                background: "var(--bg-elev-1)",
+                color:
+                  returnState.tone === "error"
+                    ? "var(--danger)"
+                    : "var(--fg-muted)",
+              }}
+            >
+              {returnState.message}
+            </div>
+          )}
 
           <div className="bill-grid">
             {/* MAIN column */}
@@ -198,7 +293,7 @@ export default function BillingPage() {
                         fontVariantNumeric: "tabular-nums",
                       }}
                     >
-                      {fmtUSD(balanceUSD)}
+                      {balanceKnown ? fmtUSD(balanceUSD) : "—"}
                     </div>
                   </div>
                   <span
@@ -226,7 +321,11 @@ export default function BillingPage() {
                         background: isLow ? "var(--warm)" : "var(--accent)",
                       }}
                     />
-                    {isLow ? "Low balance" : "Active"}
+                    {!balanceKnown
+                      ? "Checking…"
+                      : isLow
+                        ? "Low balance"
+                        : "Active"}
                   </span>
                 </div>
               </div>
@@ -249,9 +348,10 @@ export default function BillingPage() {
 
                 {/* Preset cards */}
                 <div
+                  className="am-grid-4"
                   style={{
                     display: "grid",
-                    gridTemplateColumns: "repeat(4, 1fr)",
+                    gridTemplateColumns: "var(--wf-kpi-cols)",
                     gap: 8,
                   }}
                 >
@@ -347,11 +447,23 @@ export default function BillingPage() {
                       ₹
                     </span>
                     <input
-                      type="number"
-                      inputMode="numeric"
+                      // Deliberately type="text", not type="number": a number
+                      // input carries spinner arrows (and scroll-wheel/arrow-key
+                      // stepping) that let the amount change without anyone
+                      // typing it. The value is still numeric — non-numeric
+                      // characters are rejected on input below.
+                      type="text"
+                      inputMode="decimal"
                       placeholder="Custom amount"
                       value={customINR}
-                      onChange={(e) => setCustomINR(e.target.value)}
+                      onChange={(e) => {
+                        const next = e.target.value;
+                        // Digits with at most one decimal point; empty clears
+                        // back to the selected preset.
+                        if (next === "" || /^\d*\.?\d*$/.test(next)) {
+                          setCustomINR(next);
+                        }
+                      }}
                       style={{
                         flex: 1,
                         height: "100%",
@@ -381,17 +493,19 @@ export default function BillingPage() {
                     style={{
                       margin: "8px 2px 0",
                       fontSize: 11,
-                      color: "var(--fg-dim)",
+                      color: overMax ? "var(--danger)" : "var(--fg-dim)",
                     }}
                   >
-                    Get 5% bonus credits on top-ups of ₹1000 or more.
+                    {overMax
+                      ? `Maximum top-up is $${MAX_TOPUP_USD} (about ₹${MAX_INR.toLocaleString("en-IN")}).`
+                      : "Get 5% bonus credits on top-ups of ₹1000 or more."}
                   </p>
                 </div>
 
-                {lastPurchase && (
+                {lastPurchase?.amountINR !== undefined && (
                   <button
                     type="button"
-                    onClick={() => openCheckoutFor(lastPurchase.amountINR)}
+                    onClick={() => openCheckoutFor(lastPurchase.amountINR!)}
                     style={{
                       width: "100%",
                       height: 36,

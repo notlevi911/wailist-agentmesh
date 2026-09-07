@@ -40,6 +40,14 @@ func TestEncryptField_EmptyPreservesExisting(t *testing.T) {
 	}
 }
 
+func TestEncryptField_ClearSentinelWipesExisting(t *testing.T) {
+	existing := encryptField("original-key", "", testEncKey)
+	cleared := encryptField(ClearSentinel, existing, testEncKey)
+	if cleared != "" {
+		t.Errorf("clear sentinel: want empty got %q", cleared)
+	}
+}
+
 func TestEncryptField_AlreadyEncryptedPassesThrough(t *testing.T) {
 	blob := encryptField("key", "", testEncKey)
 	again := encryptField(blob, "", testEncKey)
@@ -238,6 +246,19 @@ func TestEncryptNodes_NilSecretsMapPreservesExisting(t *testing.T) {
 	}
 }
 
+func TestEncryptNodes_SecretsMapClearSentinelWipesExistingKey(t *testing.T) {
+	existing := []models.WorkflowNode{
+		{ID: "n1", Secrets: map[string]string{"httpHeadersJSON": encPrefix + "existingcipher"}},
+	}
+	incoming := []models.WorkflowNode{
+		{ID: "n1", Secrets: map[string]string{"httpHeadersJSON": ClearSentinel}},
+	}
+	result := encryptNodes(incoming, testEncKey, existing)
+	if result[0].Secrets["httpHeadersJSON"] != "" {
+		t.Errorf("clear sentinel should wipe the existing per-key blob: got %q", result[0].Secrets["httpHeadersJSON"])
+	}
+}
+
 func TestEncryptNodes_SecretsMapPreservesOmittedKeys(t *testing.T) {
 	existing := []models.WorkflowNode{
 		{ID: "n1", Secrets: map[string]string{
@@ -259,5 +280,51 @@ func TestMaskNodes_NilSecretsMapStaysNil(t *testing.T) {
 	masked := maskNodes(nodes)
 	if masked[0].Secrets != nil {
 		t.Errorf("want nil, got %v", masked[0].Secrets)
+	}
+}
+
+func TestRedactNodesForBuildAgent_StripsFileParamValue(t *testing.T) {
+	nodes := []models.WorkflowNode{{
+		ID:   "n1",
+		Type: models.NodeTypeTool402,
+		CustomParams: []models.CustomParam{
+			{Name: "resume", Kind: "file", Value: "base64hugefilecontent==", FileName: "resume.pdf", MIMEType: "application/pdf"},
+			{Name: "note", Kind: "text", Value: "keep this"},
+		},
+	}}
+	out := redactNodesForBuildAgent(nodes)
+	got := out[0].CustomParams
+	if got[0].Value != "" {
+		t.Errorf("want file bytes stripped, got %q", got[0].Value)
+	}
+	if got[0].FileName != "resume.pdf" || got[0].MIMEType != "application/pdf" {
+		t.Errorf("want file metadata kept so the agent still knows a file is attached, got %+v", got[0])
+	}
+	if got[1].Value != "keep this" {
+		t.Errorf("want a text param untouched, got %q", got[1].Value)
+	}
+}
+
+func TestRedactNodesForBuildAgent_AlsoMasksSecrets(t *testing.T) {
+	nodes := []models.WorkflowNode{{
+		ID:     "n1",
+		APIKey: encPrefix + "ciphertext",
+	}}
+	out := redactNodesForBuildAgent(nodes)
+	if out[0].APIKey != EncSentinel {
+		t.Errorf("want the usual maskNodes sentinel behaviour preserved, got %q", out[0].APIKey)
+	}
+}
+
+func TestRedactNodesForBuildAgent_DoesNotMutateInput(t *testing.T) {
+	nodes := []models.WorkflowNode{{
+		ID: "n1",
+		CustomParams: []models.CustomParam{
+			{Name: "resume", Kind: "file", Value: "base64content"},
+		},
+	}}
+	_ = redactNodesForBuildAgent(nodes)
+	if nodes[0].CustomParams[0].Value != "base64content" {
+		t.Errorf("want the caller's original slice untouched, got %q", nodes[0].CustomParams[0].Value)
 	}
 }

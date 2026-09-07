@@ -1,0 +1,26 @@
+# AgentMesh
+
+> Design, deploy, and monitor AI agent workflows. Agents run on a visual
+> canvas, call tools through function calling, and pay for x402-gated
+> endpoints on Algorand without a human in the loop.
+
+## What it does
+
+- Build agent workflows on a canvas: agent nodes, tool nodes, action nodes, and the edges between them.
+- Agent nodes run a full LLM function-calling loop. Supported providers: Gemini, OpenAI, Anthropic, Groq, Mistral.
+- Tools can be ordinary HTTP endpoints or x402 payment-gated endpoints. For the latter the agent's own wallet signs and settles the payment mid-run, then retries the request with proof of payment.
+- Runs stream their logs live.
+
+## x402
+
+- Relay endpoint: https://www.agent-mesh.app/api/x402/relay
+- Answers HTTP 402 to unpaid requests with a v2 challenge in the `PAYMENT-REQUIRED` header.
+- Price: 0.01 USDC (asset 31566704) on Algorand MainNet.
+- Append `?target=<url>` to route a payment through the relay to any other x402 endpoint; the relay settles the inbound leg, pays the target, and forwards the target's own response unmodified.
+- A bare request with no `?target=` returns the relay's own self-listing challenge.
+- Gasless for the payer: the challenge advertises a fee payer, so callers sign only the payment leg.
+
+## Links
+
+- Home: https://www.agent-mesh.app
+- Agent card: https://www.agent-mesh.app/.well-known/agent-card.json

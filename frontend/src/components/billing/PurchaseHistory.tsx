@@ -1,9 +1,10 @@
 "use client";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Card, Pill } from "@/components/ui";
+import { rowBtn } from "@/components/ui/buttons";
 import { useCredits } from "@/lib/credits/store";
 import { Receipt } from "./Receipt";
-import type { Purchase } from "@/lib/credits/types";
+import type { Purchase, PurchaseStatus } from "@/lib/credits/types";
 import type { PaymentMethod } from "@/components/checkout/types";
 
 const METHOD_LABELS: Record<PaymentMethod, string> = {
@@ -18,30 +19,46 @@ const dateFmt = new Intl.DateTimeFormat("en", {
   timeStyle: "short",
 });
 
-const rowBtnStyle: React.CSSProperties = {
-  height: 28,
-  padding: "0 12px",
-  borderRadius: "var(--r-2)",
-  border: "1px solid var(--border-strong)",
-  background: "transparent",
-  color: "var(--fg-muted)",
-  fontSize: 12,
-  fontWeight: 500,
-  cursor: "pointer",
-  whiteSpace: "nowrap",
+// STATUS_PILLS maps credit_ledger.status to what the row shows. Only
+// 'completed' actually granted credits; the others are surfaced rather than
+// filtered out so a user whose payment did not land can see which stage it
+// stopped at instead of an empty page.
+const STATUS_PILLS: Record<
+  PurchaseStatus,
+  { label: string; tone: "ok" | "warm" | "danger" }
+> = {
+  completed: { label: "Paid", tone: "ok" },
+  pending: { label: "Pending", tone: "warm" },
+  partial: { label: "Partial", tone: "warm" },
+  refunded: { label: "Refunded", tone: "warm" },
+  failed: { label: "Failed", tone: "danger" },
+  expired: { label: "Expired", tone: "danger" },
 };
 
-// Mock billing history sourced from the local credits store. Newest first.
+// Billing history from credit_ledger via GET /credits/purchases. Newest first.
 export function PurchaseHistory({
   onBuyAgain,
 }: {
   onBuyAgain: (amountINR: number) => void;
 }) {
-  const { purchases, hydrated } = useCredits();
+  const { purchases, purchasesKnown, purchasesFailed, refreshPurchases } =
+    useCredits();
+  // A repeat failure leaves purchasesFailed already true, so the store's state
+  // does not change and the UI would be pixel-identical to before the click.
+  // Tracking the attempt locally is what makes the retry observable.
+  const [retrying, setRetrying] = useState(false);
   const [receipt, setReceipt] = useState<Purchase | null>(null);
 
-  // Avoid rendering store-derived rows until hydrated (SSR shows nothing).
-  if (!hydrated) return null;
+  useEffect(() => {
+    void refreshPurchases();
+  }, [refreshPurchases]);
+
+  // Nothing while the first fetch is still in flight: an empty list before the
+  // server answers is "not asked yet", and rendering "No purchases yet" for it
+  // tells a paying user their receipts are gone. A FAILED fetch is different --
+  // it falls through so the section can say so and offer a retry, rather than
+  // disappearing and looking like an account that never paid.
+  if (!purchasesKnown && !purchasesFailed) return null;
 
   return (
     <>
@@ -57,7 +74,35 @@ export function PurchaseHistory({
           Billing history
         </h2>
 
-        {purchases.length === 0 ? (
+        {purchasesFailed && purchases.length === 0 ? (
+          <p style={{ fontSize: 13, color: "var(--fg-dim)", margin: 0 }}>
+            Could not load your billing history.{" "}
+            <button
+              type="button"
+              disabled={retrying}
+              onClick={() => {
+                setRetrying(true);
+                void refreshPurchases().finally(() => setRetrying(false));
+              }}
+              style={{
+                ...rowBtn,
+                // minHeight, not height: rowBtn inherits minHeight from
+                // ghostBtnSm, so overriding `height` does nothing and the
+                // link renders as a 28px box stretching this line.
+                minHeight: 0,
+                padding: 0,
+                border: "none",
+                background: "none",
+                color: "var(--accent)",
+                textDecoration: "underline",
+                cursor: retrying ? "default" : "pointer",
+                opacity: retrying ? 0.6 : 1,
+              }}
+            >
+              {retrying ? "Retrying…" : "Retry"}
+            </button>
+          </p>
+        ) : purchases.length === 0 ? (
           <p style={{ fontSize: 13, color: "var(--fg-dim)", margin: 0 }}>
             No purchases yet.
           </p>
@@ -92,7 +137,9 @@ export function PurchaseHistory({
                       fontVariantNumeric: "tabular-nums",
                     }}
                   >
-                    ₹{p.amountINR.toFixed(2)}
+                    {p.amountINR !== undefined
+                      ? `\u20B9${p.amountINR.toFixed(2)}`
+                      : `$${(p.amountUSD ?? 0).toFixed(2)}`}
                   </span>
                   <div
                     style={{
@@ -102,17 +149,38 @@ export function PurchaseHistory({
                       flexShrink: 0,
                     }}
                   >
-                    <span
-                      style={{
-                        fontSize: 13,
-                        fontFamily: "var(--font-mono)",
-                        color: "var(--accent)",
-                        fontVariantNumeric: "tabular-nums",
-                      }}
-                    >
-                      +${p.creditsUSD.toFixed(2)}
-                    </span>
-                    <Pill tone="ok">Paid</Pill>
+                    {/* credit_usd_micros is written when the row is CREATED,
+                        not when it settles, so it is what the top-up would
+                        have granted -- not what landed. Showing "+$6.00" in
+                        accent green beside a red "Failed" pill reads as money
+                        received; for a refund the balance was actively
+                        reversed. Only a completed row asserts a grant. */}
+                    {p.status === "completed" ? (
+                      <span
+                        style={{
+                          fontSize: 13,
+                          fontFamily: "var(--font-mono)",
+                          color: "var(--accent)",
+                          fontVariantNumeric: "tabular-nums",
+                        }}
+                      >
+                        +${p.creditsUSD.toFixed(2)}
+                      </span>
+                    ) : (
+                      <span
+                        style={{
+                          fontSize: 13,
+                          fontFamily: "var(--font-mono)",
+                          color: "var(--fg-dim)",
+                          fontVariantNumeric: "tabular-nums",
+                        }}
+                      >
+                        ${p.creditsUSD.toFixed(2)}
+                      </span>
+                    )}
+                    <Pill tone={STATUS_PILLS[p.status].tone}>
+                      {STATUS_PILLS[p.status].label}
+                    </Pill>
                   </div>
                 </div>
 
@@ -130,20 +198,30 @@ export function PurchaseHistory({
 
                 {/* Actions */}
                 <div style={{ display: "flex", gap: 8 }}>
-                  <button
-                    type="button"
-                    onClick={() => setReceipt(p)}
-                    style={rowBtnStyle}
-                  >
-                    Receipt
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => onBuyAgain(p.amountINR)}
-                    style={rowBtnStyle}
-                  >
-                    Buy again
-                  </button>
+                  {/* A receipt is a GST-shaped payment document. Offering one
+                      for a failed, expired or pending row would let a user
+                      print an invoice for money that never moved. */}
+                  {p.status === "completed" && (
+                    <button
+                      type="button"
+                      onClick={() => setReceipt(p)}
+                      style={rowBtn}
+                    >
+                      Receipt
+                    </button>
+                  )}
+                  {/* Only an INR row can be repeated -- the checkout is
+                      driven by an INR amount, which a crypto top-up has
+                      none of. */}
+                  {p.amountINR !== undefined && (
+                    <button
+                      type="button"
+                      onClick={() => onBuyAgain(p.amountINR!)}
+                      style={rowBtn}
+                    >
+                      Buy again
+                    </button>
+                  )}
                 </div>
               </div>
             ))}

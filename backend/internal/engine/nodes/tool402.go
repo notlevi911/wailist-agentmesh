@@ -21,6 +21,7 @@ import (
 
 	"github.com/agentmesh/backend/internal/alert"
 	"github.com/agentmesh/backend/internal/models"
+	"github.com/agentmesh/backend/internal/x402"
 )
 
 // relayHTTPClient is used only for the two calls to our own /x402/relay
@@ -594,14 +595,56 @@ type X402RelayConfig struct {
 	PlatformSpendEncMnemonic string
 	ExpectedAssetID          uint64
 	RelayBaseURL             string
-	// Ledger reserves/commits/releases credits for real on-chain tool402
-	// payments made through this config. For a run-funded agent this is
-	// swapped to the in-memory run-level pool (Task 5) and is ONLY ever
-	// used for v2-dialect dispatch (executeTool402V2Relay when
-	// RunFundingID == "", executeTool402RunLevel when it isn't) — the
-	// legacy-dialect branch below must never read this field directly; see
-	// LegacyLedger.
+	// Facilitator/PlatformWalletAddress/RelayNetwork/RelayFeePayer/FrontendURL
+	// are only used by executeTool402V2Relay's SettlePlatformFee call, right
+	// after the vendor-cost leg settles -- see that call site's comment. A
+	// zero Facilitator (dev/test wiring that never configured one) makes the
+	// fee settlement a no-op rather than a panic; the vendor payment and the
+	// internal credit debit are both unaffected either way.
+	Facilitator           *x402.FacilitatorClient
+	PlatformWalletAddress string
+	RelayNetwork          string
+	RelayFeePayer         string
+	FrontendURL           string
+	// Ledger reserves/commits/releases credits for executeTool402RunLevel
+	// only -- the in-memory run-level pool, sized to `estimate` (never
+	// padded with markup, see MarkupLedger), read only when
+	// toolIsRunFunded(node.ID) is true. Every other v2 dispatch path uses
+	// PerCallLedger instead; the legacy-dialect branch below never reads
+	// this field directly either, see LegacyLedger.
 	Ledger RunLedger
+	// PerCallLedger is the DB-backed, per-call ledger executeTool402V2Relay
+	// reserves/commits/releases amount+markup against for any v2 dispatch
+	// NOT covered by run funding for this specific tool -- both when the
+	// whole agent has no run-level pre-fund (RunFundingID == "") and when
+	// it does but THIS tool's own probe failed during estimation
+	// (toolIsRunFunded(node.ID) == false; see that method's doc comment).
+	// Deliberately never Ledger: Ledger is the in-memory run-level pool
+	// once RunFundingID != "", sized only for the tools reserveAndFundRun
+	// actually folded into its estimate -- reserving a not-run-funded
+	// tool's amount+markup against that pool would either draw down
+	// another tool's budget it was never sized for, or (now that a call
+	// reserves amount+markup instead of amount alone) spuriously exhaust
+	// it and hard-block the run even though the user's real DB balance is
+	// untouched and sufficient. Always r.newPaymentLedger(wf, run) in
+	// production, same as LegacyLedger/FlatFeeLedger.
+	PerCallLedger CallLedger
+	// MarkupLedger is the platform-flat-markup counterpart to Ledger, read
+	// only by executeTool402RunLevel. Kept as a SEPARATE pool rather than
+	// folded into Ledger's own budget: reserveAndFundRun sizes Ledger to
+	// `estimate` (the ceiling on what executeTool402RunLevel may pay OUT to
+	// vendors from Wallet 2) and MarkupLedger to `markupTotal` (a pure
+	// credits-side accounting cap -- both pools are already backed by the
+	// SAME single on-chain settlement, creditReserve = estimate+markupTotal,
+	// see reserveAndFundRun). If markup were added into Ledger's own pool
+	// instead, a single call's real vendor amount could exceed `estimate` by
+	// borrowing unused markup headroom left over from other
+	// funded-but-never-called tools, letting Wallet 2 pay out real USDC
+	// beyond what this run's vendor-cost budget actually allows. Unused for the
+	// per-call relay path (executeTool402V2Relay), which reserves its own
+	// amount+markup total from one DB-backed ledger per call — there's no
+	// upfront padded pool to protect against in that path.
+	MarkupLedger RunLedger
 	// LegacyLedger is the original per-call, DB-backed ledger (always
 	// r.newPaymentLedger(wf, run), never the run-level in-memory pool) —
 	// what the legacy flat-quote dialect's direct-pay branch reserves/
@@ -649,6 +692,18 @@ type X402RelayConfig struct {
 	// be the real settled amount — RecordRunFundedSettlement takes it at
 	// INSERT time since there is no later call that backfills it.
 	RecordSettlement func(ctx context.Context, target string, amountUSDMicros int64, settled bool) error
+	// FlatFeeLedger reserves/commits/releases credits for an agent-attached
+	// billable flat-fee node (BillableFlatFee -- an attached "http" Tool or
+	// any Action/connector node), atomically per call, exactly like
+	// LegacyLedger does for the legacy x402 dialect. Deliberately NOT a
+	// batched-at-turn-end debit: checking balance without reserving and only
+	// debiting once the whole agent turn ends would let every iteration of
+	// the tool-calling loop check the same stale balance and collectively
+	// overspend past what the user can cover (identical hazard to the one
+	// newPaymentLedger's doc comment describes for x402 payments -- see
+	// runner.go). A nil Reserve/Commit/Release is a no-op, matching the
+	// pre-existing nil-checker convention elsewhere in this package.
+	FlatFeeLedger CallLedger
 }
 
 // toolIsRunFunded reports whether toolID's real cost is already covered by
@@ -671,9 +726,22 @@ func (cfg X402RelayConfig) toolIsRunFunded(toolID string) bool {
 // was configured, or a reservation was taken but released because the
 // payment never actually settled).
 type Tool402PaymentResult struct {
-	Response         any
+	Response any
+	// SettledUSDMicros is the real vendor/on-chain component only -- for a
+	// v2 call this is strictly less than the total actually debited from
+	// the user's credits, since PlatformFeeUSDMicros below is committed as
+	// a second, separate debit_ledger row on top of it. Kept vendor-cost-
+	// only (not the sum) so this field's meaning matches its DebitKind tag
+	// and existing callers reading it for on-chain/audit purposes aren't
+	// silently handed a blended number.
 	SettledUSDMicros int64
 	DebitKind        string
+	// PlatformFeeUSDMicros is the flat markup committed alongside
+	// SettledUSDMicros for a v2 call (models.X402PlatformFeeUSDMicros,
+	// DebitKind models.DebitKindX402PlatformFee) -- zero for the legacy
+	// dialect, whose SettledUSDMicros already IS the flat markup with no
+	// separate vendor-cost component to add it to.
+	PlatformFeeUSDMicros int64
 
 	// TxID/ExplorerURL identify the INBOUND settlement leg that paid for
 	// this call (caller -> Wallet 2): the per-call facilitator settlement
@@ -694,6 +762,17 @@ type Tool402PaymentResult struct {
 	ExplorerURL         string
 	OutboundTxID        string
 	OutboundExplorerURL string
+	// PlatformFeeTxID/PlatformFeeExplorerURL identify the second, dedicated
+	// Wallet 1 -> Wallet 2 settlement that pays PlatformFeeUSDMicros
+	// on-chain -- see SettlePlatformFee's doc comment. Both empty when no
+	// fee was owed (legacy dialect, whose SettledUSDMicros already IS the
+	// flat markup with nothing separate to settle) or when settlement
+	// failed (logged/alerted, not fatal to the call -- see the call site in
+	// executeTool402V2Relay; executeTool402RunLevel never sets these, its
+	// markup is already covered by reserveAndFundRun's single up-front
+	// settlement).
+	PlatformFeeTxID        string
+	PlatformFeeExplorerURL string
 }
 
 // ChallengeAcceptsFromHeader extracts a v2 challenge's accepts[] from a
@@ -780,7 +859,7 @@ type x402Quote struct {
 // which is what this always assumed. It has to be explicit for a multipart
 // body, whose generated boundary lives in the content type and without which
 // the receiver cannot parse a single field.
-func probeTool402Endpoint(ctx context.Context, endpoint, method string, body []byte, contentType string) (isV2 bool, notPaymentRequired bool, rawResponse any, quote x402Quote, err error) {
+func probeTool402Endpoint(ctx context.Context, endpoint, method string, body []byte, contentType string, targetAuth ...string) (isV2 bool, notPaymentRequired bool, rawResponse any, quote x402Quote, err error) {
 	if err := urlValidator(endpoint); err != nil {
 		return false, false, nil, x402Quote{}, err
 	}
@@ -797,6 +876,13 @@ func probeTool402Endpoint(ctx context.Context, endpoint, method string, body []b
 			contentType = "application/json"
 		}
 		req.Header.Set("Content-Type", contentType)
+	}
+	// Variadic so every existing caller stays untouched -- only
+	// ExecuteTool402V2 passes one, to make its pre-relay probe see the same
+	// target as the relay's own fetchTargetPriceQuote does (both must agree
+	// on whether the target actually requires payment).
+	if len(targetAuth) > 0 && targetAuth[0] != "" {
+		req.Header.Set("Authorization", "Bearer "+targetAuth[0])
 	}
 	resp, err := toolHTTPClient.Do(req)
 	if err != nil {
@@ -876,7 +962,13 @@ func ParseMaxAmountRequiredAsMicros(v any) (int64, bool) {
 	switch t := v.(type) {
 	case string:
 		n, err := strconv.ParseInt(t, 10, 64)
-		if err != nil || n < 0 {
+		// Same 1e15-micros ($1B/call) ceiling as the float64 branch below --
+		// without it a target quoting a huge numeric string (e.g. close to
+		// MaxInt64) parses "successfully" and downstream callers that add
+		// models.X402PlatformFeeUSDMicros to this value (executeTool402RunLevel,
+		// reserveAndFundRun's markup sizing) can overflow int64 into a negative
+		// amount, which store.ReserveCredits then reads as a credit INCREASE.
+		if err != nil || n < 0 || n > 1e15 {
 			return 0, false
 		}
 		return n, true
@@ -1006,7 +1098,12 @@ func ExecuteTool402V2(ctx context.Context, node models.WorkflowNode, rc RunConte
 	// successful step). Sending it costs nothing on a real 402 target, which
 	// answers 402 before reading a body, and is exactly what the paid retry
 	// below sends anyway.
-	isV2, notPaymentRequired, rawResponse, quote, err := probeTool402Endpoint(ctx, node.Endpoint, method, payBody, paramContentType)
+	// node.TendrilLeaseToken is passed through so a lease-token-gated target
+	// (Tendril's /x402/run) sees the same request here as it will from the
+	// relay's own fetchTargetPriceQuote -- otherwise this probe alone can
+	// get a non-402 auth-error response, which notPaymentRequired below
+	// would then surface as a silently "successful" node result.
+	isV2, notPaymentRequired, rawResponse, quote, err := probeTool402Endpoint(ctx, node.Endpoint, method, payBody, paramContentType, node.TendrilLeaseToken)
 	if err != nil {
 		return Tool402PaymentResult{}, err
 	}
@@ -1033,7 +1130,7 @@ func ExecuteTool402V2(ctx context.Context, node models.WorkflowNode, rc RunConte
 			}
 			return executeTool402RunLevel(ctx, node, relayCfg, targetQuote, quote.MaxAmountRequired, method, payBody)
 		}
-		return executeTool402V2Relay(ctx, node, relayCfg.USDCSigner, relayCfg.PlatformSpendEncMnemonic, relayCfg.ExpectedAssetID, relayCfg.RelayBaseURL, PaymentLedger(relayCfg.Ledger), method, payBody, paramContentType)
+		return executeTool402V2Relay(ctx, node, relayCfg, PaymentLedger(relayCfg.PerCallLedger), method, payBody, paramContentType, node.TendrilLeaseToken)
 	}
 
 	// Legacy flat-quote dialect: unchanged direct-pay path, flat-fee billing,
@@ -1107,7 +1204,7 @@ func ExecuteTool402V2(ctx context.Context, node models.WorkflowNode, rc RunConte
 // far more (net/http's default MaxHeaderBytes is 1MB). Same base64-in-
 // header pattern this file/x402relay.go already use for X-Payment and
 // Payment-Required.
-func setRelayTargetHeaders(req *http.Request, method string, body []byte, contentType string) {
+func setRelayTargetHeaders(req *http.Request, method string, body []byte, contentType, targetAuth string) {
 	if method != "" && method != http.MethodGet {
 		req.Header.Set("X-Relay-Method", method)
 	}
@@ -1122,6 +1219,12 @@ func setRelayTargetHeaders(req *http.Request, method string, body []byte, conten
 	// exists in this header.
 	if contentType != "" {
 		req.Header.Set("X-Relay-Content-Type", contentType)
+	}
+	// A bearer the TARGET requires (Tendril's lease token). Named X-Relay-Auth
+	// rather than Authorization so it can never be confused with auth for the
+	// relay itself, which is a different trust boundary entirely.
+	if targetAuth != "" {
+		req.Header.Set("X-Relay-Auth", targetAuth)
 	}
 }
 
@@ -1151,13 +1254,13 @@ const relayHeaderBodyLimit = 8 << 10
 // The relay route accepts any method (router.go registers it with Handle,
 // not Get), and neither side treats the method used to reach the relay as
 // the method for the target -- that has always been X-Relay-Method's job.
-func newRelayRequest(ctx context.Context, relayURL, targetMethod string, targetBody []byte, targetContentType string) (*http.Request, error) {
+func newRelayRequest(ctx context.Context, relayURL, targetMethod string, targetBody []byte, targetContentType, targetAuth string) (*http.Request, error) {
 	if len(targetBody) == 0 {
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, relayURL, nil)
 		if err != nil {
 			return nil, err
 		}
-		setRelayTargetHeaders(req, targetMethod, nil, targetContentType)
+		setRelayTargetHeaders(req, targetMethod, nil, targetContentType, targetAuth)
 		return req, nil
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, relayURL, bytes.NewReader(targetBody))
@@ -1168,7 +1271,7 @@ func newRelayRequest(ctx context.Context, relayURL, targetMethod string, targetB
 	// not something the relay should parse. The encoding the TARGET needs
 	// travels separately in X-Relay-Content-Type.
 	req.Header.Set("Content-Type", "application/octet-stream")
-	setRelayTargetHeaders(req, targetMethod, targetBody, targetContentType)
+	setRelayTargetHeaders(req, targetMethod, targetBody, targetContentType, targetAuth)
 	return req, nil
 }
 
@@ -1178,14 +1281,18 @@ func newRelayRequest(ctx context.Context, relayURL, targetMethod string, targetB
 // target on the relay's own end, same "method/body only matter for the
 // downstream target, never for talking to the relay" split PayTargetFromWallet2
 // and probeTool402Endpoint already follow).
-func executeTool402V2Relay(ctx context.Context, node models.WorkflowNode, usdcSigner USDCGroupSigner, platformSpendEncMnemonic string, expectedAssetID uint64, relayBaseURL string, ledger PaymentLedger, targetMethod string, targetBody []byte, targetContentType string) (Tool402PaymentResult, error) {
+func executeTool402V2Relay(ctx context.Context, node models.WorkflowNode, cfg X402RelayConfig, ledger PaymentLedger, targetMethod string, targetBody []byte, targetContentType, targetAuth string) (Tool402PaymentResult, error) {
+	usdcSigner := cfg.USDCSigner
+	platformSpendEncMnemonic := cfg.PlatformSpendEncMnemonic
+	expectedAssetID := cfg.ExpectedAssetID
+	relayBaseURL := cfg.RelayBaseURL
 	if platformSpendEncMnemonic == "" || usdcSigner == nil {
 		return Tool402PaymentResult{Response: map[string]any{"error": "payment required but no platform spend wallet configured"}}, nil
 	}
 
 	relayURL := relayBaseURL + "/x402/relay?target=" + url.QueryEscape(node.Endpoint)
 
-	quoteReq, err := newRelayRequest(ctx, relayURL, targetMethod, targetBody, targetContentType)
+	quoteReq, err := newRelayRequest(ctx, relayURL, targetMethod, targetBody, targetContentType, targetAuth)
 	if err != nil {
 		return Tool402PaymentResult{}, fmt.Errorf("x402 relay: building the quote request failed: %w", err)
 	}
@@ -1212,8 +1319,25 @@ func executeTool402V2Relay(ctx context.Context, node models.WorkflowNode, usdcSi
 		Resource   map[string]any `json:"resource"`
 		Extensions map[string]any `json:"extensions"`
 	}
+	// A target that answers the quote GET with anything other than a real 402
+	// challenge (an expired auth token, a 5xx, a plain error body) used to
+	// collapse into one generic "invalid challenge response" with no way to
+	// tell those apart from a genuinely malformed challenge — a dead end for
+	// diagnosing e.g. an expired Tendril lease token hitting /x402/run.
+	// Surface what the target actually said instead: status plus a
+	// truncated body.
 	if json.Unmarshal(quoteBody, &relayChallenge) != nil || len(relayChallenge.Accepts) == 0 {
-		return Tool402PaymentResult{}, fmt.Errorf("x402 relay: invalid challenge response")
+		snippet := string(quoteBody)
+		if len(snippet) > 300 {
+			snippet = snippet[:300]
+		}
+		if quoteResp.StatusCode != http.StatusPaymentRequired {
+			return Tool402PaymentResult{}, fmt.Errorf(
+				"x402 relay: target returned %s instead of a payment challenge: %s",
+				quoteResp.Status, snippet)
+		}
+		return Tool402PaymentResult{}, fmt.Errorf(
+			"x402 relay: target's 402 challenge has no accepts[]: %s", snippet)
 	}
 	accept := relayChallenge.Accepts[0]
 	payTo, _ := accept["payTo"].(string)
@@ -1238,12 +1362,18 @@ func executeTool402V2Relay(ctx context.Context, node models.WorkflowNode, usdcSi
 		return Tool402PaymentResult{}, fmt.Errorf("x402 relay: unexpected asset id %d, want %d", assetID, expectedAssetID)
 	}
 	amount, err := strconv.ParseUint(amountStr, 10, 64)
-	if err != nil || amount == 0 || amount > math.MaxInt64 {
+	if err != nil || amount == 0 || amount > uint64(models.MaxSingleX402QuoteUSDMicros) {
 		return Tool402PaymentResult{}, fmt.Errorf("x402 relay: invalid settlement amount %q", amountStr)
 	}
 
 	// USDC's 6 decimals match credit_balance_usd_micros' scale exactly —
 	// the relay's asset base-unit amount converts to USD micros 1:1.
+	//
+	// total is amount (the real vendor cost, what actually leaves Wallet 2)
+	// plus the platform's flat markup -- see executeTool402RunLevel's
+	// identical total/amount split for the run-funded path; both real x402
+	// dispatch paths bill the same way.
+	total := int64(amount) + models.X402PlatformFeeUSDMicros
 	//
 	// Reserve (atomically decrement) the exact amount now, before signing —
 	// not just check it — so a second call racing this one (another
@@ -1252,7 +1382,7 @@ func executeTool402V2Relay(ctx context.Context, node models.WorkflowNode, usdcSi
 	// and cause the platform to pay out more than the user can cover in
 	// aggregate.
 	if reserve := ledger.Reserve; reserve != nil {
-		if err := reserve(ctx, int64(amount)); err != nil {
+		if err := reserve(ctx, total); err != nil {
 			return Tool402PaymentResult{}, &ErrBalanceBlocked{Err: err}
 		}
 	}
@@ -1265,14 +1395,14 @@ func executeTool402V2Relay(ctx context.Context, node models.WorkflowNode, usdcSi
 	defer func() {
 		if !settled {
 			if release := ledger.Release; release != nil {
-				release(ctx, int64(amount))
+				release(ctx, total)
 			}
 		}
 	}()
 	releaseReservation := func() {
 		settled = true
 		if release := ledger.Release; release != nil {
-			release(ctx, int64(amount))
+			release(ctx, total)
 		}
 	}
 
@@ -1293,7 +1423,7 @@ func executeTool402V2Relay(ctx context.Context, node models.WorkflowNode, usdcSi
 	}
 	xPayment, _ := json.Marshal(xPaymentFields)
 
-	payReq, err := newRelayRequest(ctx, relayURL, targetMethod, targetBody, targetContentType)
+	payReq, err := newRelayRequest(ctx, relayURL, targetMethod, targetBody, targetContentType, targetAuth)
 	if err != nil {
 		releaseReservation()
 		return Tool402PaymentResult{}, fmt.Errorf("x402 relay: building the payment request failed: %w", err)
@@ -1328,9 +1458,72 @@ func executeTool402V2Relay(ctx context.Context, node models.WorkflowNode, usdcSi
 	if payResp.Header.Get("X-Inbound-Settled") == "true" {
 		out.SettledUSDMicros = int64(amount)
 		out.DebitKind = models.DebitKindX402RelayCost
+		out.PlatformFeeUSDMicros = models.X402PlatformFeeUSDMicros
 		settled = true
 		if commit := ledger.Commit; commit != nil {
 			commit(ctx, node.ID, int64(amount), models.DebitKindX402RelayCost)
+			commit(ctx, node.ID, models.X402PlatformFeeUSDMicros, models.DebitKindX402PlatformFee)
+		}
+		// Settle the platform's own flat markup as a second, real Wallet 1
+		// -> Wallet 2 payment -- see SettlePlatformFee's doc comment for why
+		// this can't just be folded into the vendor-cost leg above. Best
+		// effort: the vendor has already been paid and the caller's credit
+		// balance already reflects the full charge via the two Commit calls
+		// above, so a failure here is a treasury reconciliation problem, not
+		// a reason to fail a tool call that has, in every way that matters
+		// to the caller, already succeeded. cfg.Facilitator == nil (dev/test
+		// wiring that never configured one) makes this a silent no-op.
+		//
+		// Detached from ctx (context.WithoutCancel) -- unlike FundRunReserve,
+		// where a StopWorkflow landing mid-retry just means ReleaseReservedCredits
+		// undoes a reservation that was never committed, the two Commit calls
+		// above have ALREADY moved this fee into the caller's committed ledger
+		// total by the time we get here. A StopWorkflow racing this call must
+		// not be allowed to abort the retry sequence early (selfSettleWallet1ToWallet2's
+		// ctx.Err() check would do exactly that on a cancelable ctx): that would
+		// leave the fee permanently billed in the ledger with no on-chain
+		// settlement ever attempted again, not merely delayed. SelfSettleRetryBudget
+		// still bounds how long this can run.
+		//
+		// Runs synchronously (not backgrounded) even though it's best-effort:
+		// this blocks the agent's tool-calling loop for up to
+		// SelfSettleRetryBudget on a degraded facilitator, which is a real
+		// cost, but backgrounding it would mean either dropping
+		// PlatformFeeTxID/PlatformFeeExplorerURL from the tool result
+		// entirely (LogDrawer's receipt display and platformfee_test.go both
+		// depend on it being there synchronously on success) or bolting on
+		// a callback/polling path to fill it in later. Given the fee is
+		// already committed either way, the ceiling here bounds the
+		// downside to a fixed worst case rather than an unbounded hang, and
+		// the CRITICAL alert below is the actual backstop for the failure
+		// case -- worth revisiting if p95 tool-call latency under a
+		// degraded facilitator becomes a real product problem.
+		if cfg.Facilitator != nil {
+			fctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), SelfSettleRetryBudget)
+			feeTxID, feeErr := SettlePlatformFee(fctx, RunPreFundConfig{
+				USDCSigner:               usdcSigner,
+				PlatformSpendEncMnemonic: platformSpendEncMnemonic,
+				Facilitator:              cfg.Facilitator,
+				PlatformWalletAddress:    cfg.PlatformWalletAddress,
+				RelayNetwork:             cfg.RelayNetwork,
+				RelayFeePayer:            cfg.RelayFeePayer,
+				ExpectedAssetID:          expectedAssetID,
+				FrontendURL:              cfg.FrontendURL,
+			}, models.X402PlatformFeeUSDMicros)
+			cancel()
+			if feeErr != nil {
+				msg := fmt.Sprintf("CRITICAL: x402 platform fee failed to settle on-chain (node %s, target %s, fee %d): %v",
+					node.ID, node.Endpoint, models.X402PlatformFeeUSDMicros, feeErr)
+				log.Print(msg)
+				go alert.Notify(context.Background(), alert.ChannelPayments, msg)
+			} else {
+				out.PlatformFeeTxID = feeTxID
+				out.PlatformFeeExplorerURL = ExplorerURLForAsset(expectedAssetID, feeTxID)
+				if m, ok := out.Response.(map[string]any); ok {
+					m["platformFeeTxId"] = feeTxID
+					m["platformFeeExplorerURL"] = out.PlatformFeeExplorerURL
+				}
+			}
 		}
 		// Surfaces the real, already-settled inbound tx id in the node's own
 		// output (rather than only the DB audit trail) so a run's console log
@@ -1386,7 +1579,7 @@ func executeTool402V2Relay(ctx context.Context, node models.WorkflowNode, usdcSi
 			if len(snippet) > errSnippetLimit {
 				snippet = snippet[:errSnippetLimit]
 			}
-			return out, fmt.Errorf("x402 relay: target rejected the paid request (status %d): %s", payResp.StatusCode, snippet)
+			return out, &ErrPaymentAlreadyCommitted{Err: fmt.Errorf("x402 relay: target rejected the paid request (status %d): %s", payResp.StatusCode, snippet)}
 		}
 	} else {
 		releaseReservation()
@@ -1426,13 +1619,38 @@ func executeTool402RunLevel(ctx context.Context, node models.WorkflowNode, cfg X
 	// time gap exists there (the agent's tool-calling loop runs between
 	// that dispatch and its own pay attempt).
 
+	// Every real x402 call -- v2 or legacy, run-funded or per-call -- bills
+	// the platform's flat markup on top of the real vendor amount, not just
+	// the vendor amount alone. amount and markup are reserved/committed
+	// against two SEPARATE pools here, not summed into one: cfg.Ledger is
+	// sized to `estimate` by reserveAndFundRun -- the ceiling on what may
+	// be paid OUT to vendors from Wallet 2 -- so it correctly gates the
+	// real PayTargetFromWallet2 call below at this run's own vendor-cost
+	// budget. cfg.MarkupLedger is a second pool sized to markupTotal, a
+	// pure credits-side accounting cap on top of the SAME on-chain
+	// settlement (both pools are backed by reserveAndFundRun's single
+	// creditReserve = estimate+markupTotal transfer, not two separate
+	// ones). Reserving amount+markup from ONE pool sized estimate+markupTotal
+	// would let a single call's real amount exceed `estimate` by borrowing
+	// unused markup headroom from other funded-but-uncalled tools, causing
+	// Wallet 2 to pay out real USDC this run never backed on-chain.
+	markup := int64(models.X402PlatformFeeUSDMicros)
+
 	// Nil-safe like every other ledger call site in this file, even though
-	// this path is only ever reached with a fully-populated cfg.Ledger
-	// today (only from ExecuteTool402V2 once toolIsRunFunded is true) -- so
-	// a future caller that forgets to wire it up fails loudly instead of
-	// panicking on a nil func call.
+	// this path is only ever reached with fully-populated cfg.Ledger/
+	// cfg.MarkupLedger today (only from ExecuteTool402V2 once
+	// toolIsRunFunded is true) -- so a future caller that forgets to wire
+	// them up fails loudly instead of panicking on a nil func call.
 	if reserve := cfg.Ledger.Reserve; reserve != nil {
 		if err := reserve(ctx, amount); err != nil {
+			return Tool402PaymentResult{}, &ErrBalanceBlocked{Err: err}
+		}
+	}
+	if reserve := cfg.MarkupLedger.Reserve; reserve != nil {
+		if err := reserve(ctx, markup); err != nil {
+			if release := cfg.Ledger.Release; release != nil {
+				release(ctx, amount)
+			}
 			return Tool402PaymentResult{}, &ErrBalanceBlocked{Err: err}
 		}
 	}
@@ -1453,9 +1671,12 @@ func executeTool402RunLevel(ctx context.Context, node models.WorkflowNode, cfg X
 	if payErr != nil && !result.Signed {
 		// Money never moved (asset mismatch, over-cap, or a failure signing
 		// the payment group, all checked/attempted before any real payment
-		// was sent) -- release the reservation, nothing was ever spent.
+		// was sent) -- release both reservations, nothing was ever spent.
 		if release := cfg.Ledger.Release; release != nil {
 			release(ctx, amount)
+		}
+		if release := cfg.MarkupLedger.Release; release != nil {
+			release(ctx, markup)
 		}
 		return Tool402PaymentResult{}, payErr
 	}
@@ -1484,15 +1705,26 @@ func executeTool402RunLevel(ctx context.Context, node models.WorkflowNode, cfg X
 		go alert.Notify(context.Background(), alert.ChannelPayments, msg)
 	}
 
+	// Two separate debit_ledger rows for one call, each committed against
+	// the pool it was reserved from above: the real vendor cost (what
+	// Wallet 2 actually paid out, cfg.Ledger) and the platform's flat
+	// markup on top of it (cfg.MarkupLedger) -- both already backed by the
+	// SAME real on-chain transfer, the run's single up-front FundRunReserve
+	// settlement (see reserveAndFundRun's creditReserve), not a second
+	// transfer per call. Commit only ever writes the audit row, it never
+	// touches either pool's remaining balance.
 	if commit := cfg.Ledger.Commit; commit != nil {
 		commit(ctx, node.ID, amount, models.DebitKindX402RelayCost)
+	}
+	if commit := cfg.MarkupLedger.Commit; commit != nil {
+		commit(ctx, node.ID, markup, models.DebitKindX402PlatformFee)
 	}
 
 	if payErr != nil {
 		// Target unreachable at the network level -- no response body to
 		// return, nothing else to give the caller but the error. The ledger
 		// above still reflects the real spend via Commit, not Release.
-		return Tool402PaymentResult{}, payErr
+		return Tool402PaymentResult{}, &ErrPaymentAlreadyCommitted{Err: payErr}
 	}
 
 	var response any
@@ -1514,11 +1746,11 @@ func executeTool402RunLevel(ctx context.Context, node models.WorkflowNode, cfg X
 		if len(snippet) > errSnippetLimit {
 			snippet = snippet[:errSnippetLimit]
 		}
-		return Tool402PaymentResult{Response: response, SettledUSDMicros: amount, DebitKind: models.DebitKindX402RelayCost},
-			fmt.Errorf("x402 run-level: target rejected the paid request (status %d): %s", result.StatusCode, snippet)
+		return Tool402PaymentResult{Response: response, SettledUSDMicros: amount, DebitKind: models.DebitKindX402RelayCost, PlatformFeeUSDMicros: markup},
+			&ErrPaymentAlreadyCommitted{Err: fmt.Errorf("x402 run-level: target rejected the paid request (status %d): %s", result.StatusCode, snippet)}
 	}
 
-	out := Tool402PaymentResult{Response: response, SettledUSDMicros: amount, DebitKind: models.DebitKindX402RelayCost}
+	out := Tool402PaymentResult{Response: response, SettledUSDMicros: amount, DebitKind: models.DebitKindX402RelayCost, PlatformFeeUSDMicros: markup}
 
 	// The INBOUND leg for a run-funded call is the run's single up-front
 	// funding settlement (Wallet 1 -> Wallet 2), settled once in bulk by

@@ -35,7 +35,7 @@ func TestRelayRequestSendsLargeBodyAsBody(t *testing.T) {
 	// Larger than any real proxy's per-header limit, and larger than the
 	// multipart body a single 2 MiB file param produces.
 	large := make([]byte, 184*1024)
-	req, err := newRelayRequest(context.Background(), relay.URL+"/x402/relay", http.MethodPost, large, "multipart/form-data; boundary=abc123")
+	req, err := newRelayRequest(context.Background(), relay.URL+"/x402/relay", http.MethodPost, large, "multipart/form-data; boundary=abc123", "")
 	if err != nil {
 		t.Fatalf("building the relay request failed: %v", err)
 	}
@@ -71,7 +71,7 @@ func TestRelayRequestSendsLargeBodyAsBody(t *testing.T) {
 func TestRelayRequestKeepsHeaderForSmallBody(t *testing.T) {
 	body := []byte(`{"url":"https://example.com"}`)
 
-	req, err := newRelayRequest(context.Background(), "https://relay.example/x402/relay", http.MethodPost, body, "application/json")
+	req, err := newRelayRequest(context.Background(), "https://relay.example/x402/relay", http.MethodPost, body, "application/json", "")
 	if err != nil {
 		t.Fatalf("building the relay request failed: %v", err)
 	}
@@ -93,7 +93,7 @@ func TestRelayRequestKeepsHeaderForSmallBody(t *testing.T) {
 // every existing bodyless tool402 call keeps reaching the relay exactly as
 // it did before.
 func TestRelayRequestStaysGETWithoutBody(t *testing.T) {
-	req, err := newRelayRequest(context.Background(), "https://relay.example/x402/relay", "", nil, "")
+	req, err := newRelayRequest(context.Background(), "https://relay.example/x402/relay", "", nil, "", "")
 	if err != nil {
 		t.Fatalf("building the relay request failed: %v", err)
 	}

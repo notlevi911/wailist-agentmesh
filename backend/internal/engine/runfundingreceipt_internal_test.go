@@ -51,6 +51,12 @@ func TestPrependRunFundingReceipt(t *testing.T) {
 	if got["debitKind"] != models.DebitKindX402RelayCost {
 		t.Fatalf("want debitKind %q, got %v", models.DebitKindX402RelayCost, got["debitKind"])
 	}
+	if got["isFundingReceipt"] != true {
+		t.Fatalf("want isFundingReceipt true so a tool-call counter can skip this row, got %v", got["isFundingReceipt"])
+	}
+	if payments[1]["isFundingReceipt"] != nil {
+		t.Fatalf("want the real per-call receipt unmarked, got %v", payments[1]["isFundingReceipt"])
+	}
 }
 
 // TestPrependRunFundingReceiptNoFunding covers the ordinary per-call relay

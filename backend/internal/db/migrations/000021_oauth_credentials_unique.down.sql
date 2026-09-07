@@ -1,0 +1,1 @@
+ALTER TABLE oauth_credentials DROP CONSTRAINT IF EXISTS oauth_credentials_user_provider_label_key;

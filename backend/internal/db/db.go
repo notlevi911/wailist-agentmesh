@@ -54,6 +54,13 @@ func runMigrations(databaseURL string) error {
 	if err != nil {
 		return err
 	}
+	// m.Close() releases the database connection this migrate instance opened
+	// independently of the pgxpool above -- without it, every call to New()
+	// (i.e. every test that stands up a *Store) leaks one Postgres connection
+	// for the life of the process. Across a full test run that adds up fast
+	// enough to exhaust max_connections and fail unrelated tests deep into
+	// the run with "too many clients already".
+	defer m.Close()
 	if err := m.Up(); err != nil && err != migrate.ErrNoChange {
 		return err
 	}

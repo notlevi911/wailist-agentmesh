@@ -1,0 +1,23 @@
+node_modules/
+
+# Static export copied in from ../frontend by `npm run copy:web`. Build
+# output, never edited here and never committed.
+www/
+
+# Gradle and Android Studio local state. These patterns are deliberately NOT
+# anchored to android/: opening this folder in Android Studio drops .idea/
+# and .gradle/ at whatever level it was opened, and an unanchored pattern
+# catches them wherever they land.
+.gradle/
+.idea/
+build/
+*.iml
+
+# Absolute SDK path, generated per machine (sdk.dir=C:\Users\...). Committing
+# it breaks the build for every other developer and for CI.
+local.properties
+
+# Signing material. Never commit a keystore.
+*.keystore
+*.jks
+keystore.properties

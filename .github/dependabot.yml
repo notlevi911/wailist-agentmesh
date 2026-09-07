@@ -1,0 +1,29 @@
+version: 2
+updates:
+  # Tracks pinned-SHA actions (softprops/action-gh-release etc.) so a bump
+  # is a reviewable PR, not a silent re-float of a mutable tag.
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+
+  - package-ecosystem: "gomod"
+    directory: "/backend"
+    schedule:
+      interval: "weekly"
+
+  # package-lock.json is the source of truth here (CI and local dev both
+  # use npm, per CLAUDE.md) -- Dependabot bumps that lockfile only.
+  # frontend/pnpm-lock.yaml is Vercel's, kept in sync by hand
+  # (`pnpm install --lockfile-only`) same as every prior manual bump; a
+  # Dependabot PR here doesn't touch it, so still regenerate it after
+  # merging one that changes a real dependency version.
+  - package-ecosystem: "npm"
+    directory: "/frontend"
+    schedule:
+      interval: "weekly"
+
+  - package-ecosystem: "npm"
+    directory: "/mobile"
+    schedule:
+      interval: "weekly"

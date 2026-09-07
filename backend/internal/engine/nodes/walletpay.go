@@ -31,6 +31,11 @@ type Wallet2PayConfig struct {
 	// exact content type it was generated with, boundary included, or the
 	// target cannot parse a single field of it.
 	ContentType string
+	// Authorization is a bearer the TARGET requires (Tendril's lease token,
+	// for example) — carried here rather than in paymentHeaders below since
+	// it authenticates against the target's own business logic, not the
+	// x402 payment scheme.
+	Authorization string
 }
 
 // TargetQuote is defined in tool402.go (used by ProbeX402Quote) — walletpay.go
@@ -177,6 +182,9 @@ func PayTargetFromWallet2(ctx context.Context, cfg Wallet2PayConfig, target, met
 			contentType = "application/json"
 		}
 		payReq.Header.Set("Content-Type", contentType)
+	}
+	if cfg.Authorization != "" {
+		payReq.Header.Set("Authorization", "Bearer "+cfg.Authorization)
 	}
 	for name, value := range paymentHeaders {
 		payReq.Header.Set(name, value)

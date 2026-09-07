@@ -7,6 +7,7 @@ import (
 	"github.com/agentmesh/backend/internal/engine"
 	"github.com/agentmesh/backend/internal/payments"
 	"github.com/agentmesh/backend/internal/sse"
+	"github.com/agentmesh/backend/internal/tendril"
 	"github.com/agentmesh/backend/internal/wallet"
 	"github.com/agentmesh/backend/internal/x402"
 )
@@ -43,11 +44,16 @@ type USDCSigner interface {
 var _ USDCSigner = (*wallet.Service)(nil)
 
 type Deps struct {
-	Store         *db.Store
-	Broker        *sse.Broker
-	Wallet        *wallet.Service
-	Engine        *engine.Runner
-	BaseURL       string
+	Store   *db.Store
+	Broker  *sse.Broker
+	Wallet  *wallet.Service
+	Engine  *engine.Runner
+	BaseURL string
+	// RelayBaseURL is where THIS instance's own /x402/relay is reached from
+	// (see main.go's relayBaseURL — distinct from BaseURL, which also signs
+	// auth cookies). Needed by the Tendril console's direct-action endpoints
+	// to build their own X402RelayConfig.
+	RelayBaseURL  string
 	JWTSecret     string
 	EncryptionKey string
 
@@ -57,18 +63,35 @@ type Deps struct {
 	GoogleClientID     string
 	GoogleClientSecret string
 
-	Cashfree    CashfreeClient
+	// BazaarBaseURL is GoPlausible's facilitator, whose public
+	// /discovery/resources catalog backs the Bazaar page. Overridable so tests
+	// can point at a fake upstream.
+	BazaarBaseURL string
+	bazaarCache   bazaarCache
+
+	Cashfree      CashfreeClient
 	CashfreeAppID string
 
 	NOWPayments NOWPaymentsClient
 
 	PlatformWalletAddress     string
 	PlatformWalletEncMnemonic string
-	FacilitatorClient         *x402.FacilitatorClient
-	USDCAssetID               uint64
-	RelayNetwork              string
-	RelayFeePayer             string
-	USDCSigner                USDCSigner
+	// PlatformSpendWalletEncMnemonic is Wallet 1 — the wallet that actually
+	// signs and sends every relayed outbound x402 payment. Needed here (not
+	// just inside engine.Runner) so the Tendril console's direct-action
+	// endpoints can build their own X402RelayConfig without going through a
+	// workflow run.
+	PlatformSpendWalletEncMnemonic string
+	// PlatformGeminiAPIKey powers the chat-driven workflow builder's
+	// meta-agent (nodes.BuildGraph) -- independent of engine.Runner's own
+	// platform-key map (main.go's runner.SetPlatformKeys call) since Deps
+	// has no access to Runner's private fields.
+	PlatformGeminiAPIKey string
+	FacilitatorClient    *x402.FacilitatorClient
+	USDCAssetID          uint64
+	RelayNetwork         string
+	RelayFeePayer        string
+	USDCSigner           USDCSigner
 	// MaxRelayOutboundUSDMicros caps a single outbound relay payment
 	// (Wallet 2 -> target). The relay fetches a target's price quote twice
 	// per cycle (once for the public challenge preview, once again at
@@ -80,4 +103,38 @@ type Deps struct {
 	// loss per call to a fixed ceiling regardless of facilitator behavior.
 	// Zero means no cap (not recommended for a production deployment).
 	MaxRelayOutboundUSDMicros int64
+
+	// TendrilClient is nil when TENDRIL_REGISTRY_URL is unset, in which case
+	// the Tendril-facing endpoints below fail closed with a clear error
+	// rather than a nil-pointer panic.
+	TendrilClient *tendril.Client
+	// TendrilSession is the same Wallet 2 session engine.Runner holds, shared
+	// here so the Tendril console's direct-action endpoints (topup/rent/run)
+	// can call nodes.ExecuteTendril without going through a workflow run.
+	TendrilSession *tendril.Session
+
+	SlackOAuthClientID          string
+	SlackOAuthClientSecret      string
+	GitHubConnectorClientID     string
+	GitHubConnectorClientSecret string
+	NotionClientID              string
+	NotionClientSecret          string
+	AirtableClientID            string
+	AirtableClientSecret        string
+	HubSpotClientID             string
+	HubSpotClientSecret         string
+	AsanaClientID               string
+	AsanaClientSecret           string
+	ClickUpClientID             string
+	ClickUpClientSecret         string
+	JiraClientID                string
+	JiraClientSecret            string
+	LinearClientID              string
+	LinearClientSecret          string
+	MailchimpClientID           string
+	MailchimpClientSecret       string
+	GitLabClientID              string
+	GitLabClientSecret          string
+	TodoistClientID             string
+	TodoistClientSecret         string
 }

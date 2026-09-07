@@ -3,9 +3,12 @@ package nodes_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"sync"
+	"sync/atomic"
 	"testing"
 
 	"github.com/agentmesh/backend/internal/engine"
@@ -82,17 +85,35 @@ func TestExecuteAgentOpenAIBillsAttachedHTTPTool(t *testing.T) {
 	nodes.SetURLValidatorForTest(func(string) error { return nil })
 	defer nodes.SetURLValidatorForTest(func(string) error { return nil })
 
-	result, err := nodes.ExecuteAgent(context.Background(), node, attach, models.AgentWallet{}, nil, rc, nil, nil, nodes.X402RelayConfig{})
+	// Billing for an attached billable flat-fee tool is now an atomic
+	// Reserve-then-Commit against FlatFeeLedger, happening the moment the
+	// call succeeds inside executeFunctionCall -- not batched into the
+	// result map. Assert on the ledger calls directly.
+	var reservedAmount, committedAmount int64
+	var committedNodeID, committedKind string
+	flatFeeLedger := nodes.CallLedger{
+		Reserve: func(ctx context.Context, amount int64) error {
+			reservedAmount = amount
+			return nil
+		},
+		Commit: func(ctx context.Context, nodeID string, amount int64, kind string) {
+			committedNodeID, committedAmount, committedKind = nodeID, amount, kind
+		},
+	}
+
+	result, err := nodes.ExecuteAgent(context.Background(), node, attach, models.AgentWallet{}, nil, rc, nil, nil, nodes.X402RelayConfig{FlatFeeLedger: flatFeeLedger})
 	if err != nil {
 		t.Fatal(err)
 	}
-	m, ok := result.(map[string]any)
-	if !ok {
-		t.Fatalf("want a map result (tool was billed), got %T: %v", result, result)
+	if result != "done" {
+		t.Fatalf("want final text result %q, got %T: %v", "done", result, result)
 	}
-	ids, ok := m["billedFlatFeeNodeIds"].([]string)
-	if !ok || len(ids) != 1 || ids[0] != "t1" {
-		t.Fatalf("want billedFlatFeeNodeIds [t1], got %v", m["billedFlatFeeNodeIds"])
+	if reservedAmount != models.ByokFlatFeeUSDMicros {
+		t.Fatalf("want Reserve called with %d, got %d", models.ByokFlatFeeUSDMicros, reservedAmount)
+	}
+	if committedNodeID != "t1" || committedAmount != models.ByokFlatFeeUSDMicros || committedKind != models.DebitKindByokFlatFee {
+		t.Fatalf("want Commit(t1, %d, %q), got Commit(%s, %d, %q)",
+			models.ByokFlatFeeUSDMicros, models.DebitKindByokFlatFee, committedNodeID, committedAmount, committedKind)
 	}
 }
 
@@ -129,16 +150,103 @@ func TestExecuteAgentBlocksAttachedToolWhenBalanceCheckFails(t *testing.T) {
 	nodes.SetURLValidatorForTest(func(string) error { return nil })
 	defer nodes.SetURLValidatorForTest(func(string) error { return nil })
 
-	checkBalance := func(ctx context.Context, amount int64) error {
-		return fmt.Errorf("insufficient credits: balance 0 micros, need %d micros", amount)
+	// A billable flat-fee attached tool (unlike tool402) is gated by
+	// FlatFeeLedger.Reserve, not checkBalance -- see executeFunctionCall's
+	// billableFlatFee branch.
+	flatFeeLedger := nodes.CallLedger{
+		Reserve: func(ctx context.Context, amount int64) error {
+			return fmt.Errorf("insufficient credits: balance 0 micros, need %d micros", amount)
+		},
 	}
 
-	result, err := nodes.ExecuteAgent(context.Background(), node, attach, models.AgentWallet{}, nil, rc, checkBalance, nil, nodes.X402RelayConfig{})
+	result, err := nodes.ExecuteAgent(context.Background(), node, attach, models.AgentWallet{}, nil, rc, nil, nil, nodes.X402RelayConfig{FlatFeeLedger: flatFeeLedger})
 	if err == nil {
-		t.Fatalf("want error from failed balance check, got result %v", result)
+		t.Fatalf("want error from failed balance reservation, got result %v", result)
 	}
 	if toolHits != 0 {
 		t.Fatalf("want zero requests to the tool server (blocked before execution), got %d", toolHits)
+	}
+}
+
+// TestExecuteAgentAttachedFlatFeeCallsCannotOverspendPastBalance is a
+// regression test for the batched-debit overspend hazard FlatFeeLedger
+// exists to close: an agent's tool-calling loop that triggers the SAME
+// billable attached tool repeatedly, one call per turn, must only ever get
+// as many calls through as the balance can actually cover -- not N calls
+// against a single balance check read once and never decremented in
+// between. Simulates a real atomically-decrementing balance (mirroring
+// db.Store.ReserveCredits) with exactly one flat fee's worth of credit: the
+// first call must succeed and decrement it to zero, every call after that
+// must be blocked before it ever reaches the tool server.
+func TestExecuteAgentAttachedFlatFeeCallsCannotOverspendPastBalance(t *testing.T) {
+	var toolHits int32
+	toolSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		toolHits++
+		w.Write([]byte(`{"result":"tool ran"}`))
+	}))
+	defer toolSrv.Close()
+
+	// LLM asks for the same attached tool 3 times in 3 separate turns.
+	llmCallCount := 0
+	llmSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		llmCallCount++
+		w.Header().Set("Content-Type", "application/json")
+		if llmCallCount <= 3 {
+			json.NewEncoder(w).Encode(map[string]any{
+				"choices": []map[string]any{{"message": map[string]any{
+					"role": "assistant",
+					"tool_calls": []map[string]any{{
+						"id":       fmt.Sprintf("call_%d", llmCallCount),
+						"type":     "function",
+						"function": map[string]any{"name": "search_tool", "arguments": "{}"},
+					}},
+				}}},
+			})
+			return
+		}
+		json.NewEncoder(w).Encode(map[string]any{
+			"choices": []map[string]any{{"message": map[string]any{"role": "assistant", "content": "done"}}},
+		})
+	}))
+	defer llmSrv.Close()
+
+	node := models.WorkflowNode{ID: "a1", Type: models.NodeTypeAgent}
+	provider := models.WorkflowNode{ID: "p1", Type: models.NodeTypeProvider, Template: "openai", APIKey: "test-key", Model: "gpt-4o"}
+	tool := models.WorkflowNode{ID: "t1", Name: "search_tool", Type: models.NodeTypeTool, Template: "http", URL: toolSrv.URL, Method: "GET"}
+	attach := models.AttachConfig{Provider: &provider, Tools: []models.WorkflowNode{tool}}
+
+	rc := engine.NewRunContext("run1", []byte(`{"message":"hello"}`))
+	nodes.SetOpenAIBaseURL(llmSrv.URL)
+	nodes.SetURLValidatorForTest(func(string) error { return nil })
+	defer nodes.SetURLValidatorForTest(func(string) error { return nil })
+
+	balance := models.ByokFlatFeeUSDMicros // exactly one call's worth
+	var mu sync.Mutex
+	flatFeeLedger := nodes.CallLedger{
+		Reserve: func(ctx context.Context, amount int64) error {
+			mu.Lock()
+			defer mu.Unlock()
+			if amount > balance {
+				return fmt.Errorf("insufficient credits: balance %d micros, need %d micros", balance, amount)
+			}
+			balance -= amount
+			return nil
+		},
+		Commit: func(ctx context.Context, nodeID string, amount int64, kind string) {},
+	}
+
+	_, err := nodes.ExecuteAgent(context.Background(), node, attach, models.AgentWallet{}, nil, rc, nil, nil, nodes.X402RelayConfig{FlatFeeLedger: flatFeeLedger})
+	var blocked *nodes.ErrBalanceBlocked
+	if !errors.As(err, &blocked) {
+		t.Fatalf("want *nodes.ErrBalanceBlocked once the balance is exhausted, got %v", err)
+	}
+	if got := atomic.LoadInt32(&toolHits); got != 1 {
+		t.Fatalf("want exactly 1 real request to the tool server (balance covers exactly 1 call), got %d -- the batched-debit overspend leak has regressed", got)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if balance != 0 {
+		t.Fatalf("want balance fully decremented to 0 after the one affordable call, got %d", balance)
 	}
 }
 
@@ -205,7 +313,7 @@ func TestExecuteAgentAttachedTool402RoutesThroughRelay(t *testing.T) {
 		PlatformSpendEncMnemonic: "platform-enc-mnemonic",
 		ExpectedAssetID:          10458941,
 		RelayBaseURL:             relay.URL,
-		Ledger:                   nodes.RunLedger(noopLedger()),
+		PerCallLedger:            nodes.CallLedger(noopLedger()),
 	}
 
 	result, err := nodes.ExecuteAgent(context.Background(), node, attach, aw, nil, rc, checkBalance, nil, relayCfg)

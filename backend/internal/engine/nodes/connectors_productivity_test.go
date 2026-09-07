@@ -70,6 +70,31 @@ func TestNotionAction_SkipsWhenNoAPIKey(t *testing.T) {
 	}
 }
 
+func TestNotionAction_PrefersOAuthTokenOverManualToken(t *testing.T) {
+	var gotAuth string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotAuth = r.Header.Get("Authorization")
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+	nodes.SetNotionAPIBaseForTest(srv.URL)
+	defer nodes.SetNotionAPIBaseForTest("")
+
+	node := models.WorkflowNode{
+		ID: "no4", Type: models.NodeTypeAction, Template: "notion",
+		Secrets: map[string]string{"notionAPIKey": "manual-secret-xxx", "notionOAuthAccessToken": "oauth-derived-token"},
+		Config:  map[string]string{"notionPageID": "abc123"},
+	}
+	rc := engine.NewRunContext("r1", []byte(`"daily summary"`))
+	_, err := nodes.ExecuteAction(context.Background(), node, rc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotAuth != "Bearer oauth-derived-token" {
+		t.Errorf("want OAuth token in Authorization header, got %q", gotAuth)
+	}
+}
+
 func TestNotionAction_SkipsWhenNoPageID(t *testing.T) {
 	node := models.WorkflowNode{
 		ID: "no3", Type: models.NodeTypeAction, Template: "notion",
@@ -120,6 +145,31 @@ func TestAirtableAction_CreatesRecord(t *testing.T) {
 	fields, _ := gotBody["fields"].(map[string]any)
 	if fields["Notes"] != "new lead captured" {
 		t.Errorf("want default field 'Notes' with message, got %v", gotBody)
+	}
+}
+
+func TestAirtableAction_PrefersOAuthTokenOverManualToken(t *testing.T) {
+	var gotAuth string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotAuth = r.Header.Get("Authorization")
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+	nodes.SetAirtableAPIBaseForTest(srv.URL)
+	defer nodes.SetAirtableAPIBaseForTest("")
+
+	node := models.WorkflowNode{
+		ID: "at4", Type: models.NodeTypeAction, Template: "airtable",
+		Secrets: map[string]string{"airtableAPIKey": "pat_xxx", "airtableOAuthAccessToken": "oauth-derived-token"},
+		Config:  map[string]string{"airtableBaseID": "appXXX", "airtableTable": "Tasks"},
+	}
+	rc := engine.NewRunContext("r1", []byte(`"new lead captured"`))
+	_, err := nodes.ExecuteAction(context.Background(), node, rc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotAuth != "Bearer oauth-derived-token" {
+		t.Errorf("want OAuth token in Authorization header, got %q", gotAuth)
 	}
 }
 
@@ -260,6 +310,31 @@ func TestAsanaAction_CreatesTask(t *testing.T) {
 	}
 }
 
+func TestAsanaAction_PrefersOAuthTokenOverManualToken(t *testing.T) {
+	var gotAuth string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotAuth = r.Header.Get("Authorization")
+		w.WriteHeader(http.StatusCreated)
+	}))
+	defer srv.Close()
+	nodes.SetAsanaAPIBaseForTest(srv.URL)
+	defer nodes.SetAsanaAPIBaseForTest("")
+
+	node := models.WorkflowNode{
+		ID: "as4", Type: models.NodeTypeAction, Template: "asana",
+		Secrets: map[string]string{"asanaAPIKey": "1/xxx", "asanaOAuthAccessToken": "oauth-derived-token"},
+		Config:  map[string]string{"asanaProjectID": "proj123"},
+	}
+	rc := engine.NewRunContext("r1", []byte(`"review pull request"`))
+	_, err := nodes.ExecuteAction(context.Background(), node, rc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotAuth != "Bearer oauth-derived-token" {
+		t.Errorf("want OAuth token in Authorization header, got %q", gotAuth)
+	}
+}
+
 func TestAsanaAction_SkipsWhenNoAPIKey(t *testing.T) {
 	node := models.WorkflowNode{
 		ID: "as2", Type: models.NodeTypeAction, Template: "asana",
@@ -324,6 +399,36 @@ func TestClickUpAction_CreatesTask(t *testing.T) {
 	}
 	if gotBody["name"] != "triage bug reports" {
 		t.Errorf("want task name from message, got %v", gotBody)
+	}
+}
+
+func TestClickUpAction_PrefersOAuthTokenOverManualToken(t *testing.T) {
+	var gotAuth string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotAuth = r.Header.Get("Authorization")
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+	nodes.SetClickUpAPIBaseForTest(srv.URL)
+	defer nodes.SetClickUpAPIBaseForTest("")
+
+	node := models.WorkflowNode{
+		ID: "cu4", Type: models.NodeTypeAction, Template: "clickup",
+		Secrets: map[string]string{"clickupAPIKey": "pk_xxx", "clickupOAuthAccessToken": "oauth-derived-token"},
+		Config:  map[string]string{"clickupListID": "list42"},
+	}
+	rc := engine.NewRunContext("r1", []byte(`"triage bug reports"`))
+	_, err := nodes.ExecuteAction(context.Background(), node, rc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The whole point of this test: ClickUp's OAuth tokens need "Bearer ",
+	// unlike the raw manual personal-token header asserted in
+	// TestClickUpAction_CreatesTask above — these two paths use different
+	// header formats on the very same endpoint, so both must be pinned
+	// exactly, not just "contains the token".
+	if gotAuth != "Bearer oauth-derived-token" {
+		t.Errorf("want Bearer-prefixed OAuth token in Authorization header, got %q", gotAuth)
 	}
 }
 
@@ -427,5 +532,29 @@ func TestTodoistAction_SkipsWhenNoAPIKey(t *testing.T) {
 	}
 	if result != "todoist_skipped_no_api_key" {
 		t.Errorf("want 'todoist_skipped_no_api_key', got %v", result)
+	}
+}
+
+func TestTodoistAction_PrefersOAuthTokenOverManualToken(t *testing.T) {
+	var gotAuth string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotAuth = r.Header.Get("Authorization")
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+	nodes.SetTodoistAPIBaseForTest(srv.URL)
+	defer nodes.SetTodoistAPIBaseForTest("")
+
+	node := models.WorkflowNode{
+		ID: "td4", Type: models.NodeTypeAction, Template: "todoist",
+		Secrets: map[string]string{"todoistAPIKey": "manual-secret-xxx", "todoistOAuthAccessToken": "oauth-derived-token"},
+	}
+	rc := engine.NewRunContext("r1", []byte(`"buy milk"`))
+	_, err := nodes.ExecuteAction(context.Background(), node, rc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotAuth != "Bearer oauth-derived-token" {
+		t.Errorf("want OAuth token in Authorization header, got %q", gotAuth)
 	}
 }

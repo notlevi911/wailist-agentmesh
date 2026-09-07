@@ -1,5 +1,19 @@
 "use client";
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect, useCallback } from "react";
+import { can } from "@/lib/readonly";
+import { ctrlBtn } from "@/components/ui/buttons";
+import { useReadOnly } from "@/hooks/useReadOnly";
+import {
+  DEFAULT_VIEW,
+  distance,
+  midpoint,
+  zoomAbout,
+  zoomByFactor,
+  fitToRects,
+  screenToWorld,
+  type Point,
+  type ViewState,
+} from "./viewport";
 import { WorkflowNode, Workflow, PortName } from "@/lib/types";
 import { NODE_TYPES } from "@/lib/data";
 import {
@@ -8,6 +22,7 @@ import {
   portForTo,
   isValidConnection,
 } from "@/lib/portUtils";
+import { IconBackspace } from "@/components/ui";
 import { CanvasNode } from "./nodes";
 
 interface CanvasGraphProps {
@@ -18,13 +33,14 @@ interface CanvasGraphProps {
   deployed: boolean;
   running: boolean;
   attachedSummaries: Record<string, { model: string | null; tools: number }>;
+  /** Populated with a function that drops a node in the middle of whatever
+   *  the canvas is currently showing. The palette uses it for tap-to-add,
+   *  which has no cursor position to place against. */
+  addAtCentreRef?: React.MutableRefObject<
+    ((meta: Partial<WorkflowNode>) => void) | null
+  >;
 }
 
-interface ViewState {
-  x: number;
-  y: number;
-  k: number;
-}
 interface WireState {
   fromId: string;
   fromPort: PortName;
@@ -44,9 +60,24 @@ export function CanvasGraph({
   deployed,
   running,
   attachedSummaries,
+  addAtCentreRef,
 }: CanvasGraphProps) {
+  // Read-only turns the graph into a diagram: pan, zoom, and selection all
+  // still work, because reading a workflow means moving around it and
+  // opening a node to see how it is configured. Only the gestures that
+  // CHANGE the graph -- dropping a node, moving one, drawing or cutting an
+  // edge -- come off.
+  const editable = can("workflow.editGraph", useReadOnly());
+
   const wrapRef = useRef<HTMLDivElement>(null);
-  const [view, setView] = useState<ViewState>({ x: 40, y: 40, k: 0.95 });
+  const [view, setView] = useState<ViewState>(DEFAULT_VIEW);
+  // Mirrors `view` for addNodeAt below to read without depending on it: `view`
+  // updates on every pointer-move during a pan/zoom/drag, and a callback that
+  // depends on it gets a new identity on every one of those ticks.
+  const viewRef = useRef(view);
+  useEffect(() => {
+    viewRef.current = view;
+  }, [view]);
   const [panning, setPanning] = useState(false);
   const panRef = useRef({ active: false, sx: 0, sy: 0, ox: 0, oy: 0 });
   const dragRef = useRef<{
@@ -78,12 +109,7 @@ export function CanvasGraph({
       const rect = el.getBoundingClientRect();
       const mx = e.clientX - rect.left,
         my = e.clientY - rect.top;
-      setView((v) => {
-        const dk = -e.deltaY * 0.0015;
-        const k2 = Math.min(2, Math.max(0.3, v.k * (1 + dk)));
-        const f = k2 / v.k;
-        return { x: mx - (mx - v.x) * f, y: my - (my - v.y) * f, k: k2 };
-      });
+      setView((v) => zoomAbout(v, v.k * (1 - e.deltaY * 0.0015), mx, my));
     };
     el.addEventListener("wheel", onWheel, { passive: false });
     return () => el.removeEventListener("wheel", onWheel);
@@ -210,19 +236,280 @@ export function CanvasGraph({
       edges: wf.edges.filter((e) => e.id !== id),
     }));
 
+  const nodeRects = useCallback(
+    () =>
+      workflow.nodes.map((n) => {
+        const t = NODE_TYPES[n.type];
+        return { x: n.x, y: n.y, w: t?.w ?? 180, h: t?.h ?? 60 };
+      }),
+    [workflow.nodes],
+  );
+
+  const fitView = useCallback(() => {
+    const el = wrapRef.current;
+    if (!el) return;
+    const rect = el.getBoundingClientRect();
+    if (rect.width <= 0 || rect.height <= 0) return;
+    setView(fitToRects(nodeRects(), rect.width, rect.height));
+  }, [nodeRects]);
+
+  // The +/- buttons magnify the middle of what is on screen. Anchoring on the
+  // world origin instead would slide the graph away as you zoom, which is what
+  // the raw `k` multiply used to do.
+  const zoomFromCentre = useCallback((factor: number) => {
+    const el = wrapRef.current;
+    const rect = el?.getBoundingClientRect();
+    const cx = rect ? rect.width / 2 : 0;
+    const cy = rect ? rect.height / 2 : 0;
+    setView((v) => zoomByFactor(v, factor, cx, cy));
+  }, []);
+
+  // ── Touch ───────────────────────────────────────────────────────────────
+  // The mouse path above is untouched; this runs alongside it. Without it the
+  // graph is completely inert on a phone -- there is no mousedown, so there is
+  // no way to pan or zoom, and a workflow whose nodes start off-screen simply
+  // cannot be looked at.
+  //
+  // Touch events rather than pointer events on purpose: a pinch needs two
+  // simultaneous contacts, and `e.touches` hands them over directly where
+  // pointer events would mean maintaining a live map of active pointer ids.
+  const touchRef = useRef<{
+    mode: "none" | "pan" | "pinch" | "node";
+    sx: number;
+    sy: number;
+    startView: ViewState;
+    startDist: number;
+    // "node" mode only: which node is moving, and where it started.
+    nodeId: string;
+    ox: number;
+    oy: number;
+  }>({
+    mode: "none",
+    sx: 0,
+    sy: 0,
+    startView: DEFAULT_VIEW,
+    startDist: 0,
+    nodeId: "",
+    ox: 0,
+    oy: 0,
+  });
+
+  // Touch coordinates relative to the canvas box, which is the space the view
+  // transform is expressed in.
+  const localPoint = (t: React.Touch, rect: DOMRect): Point => ({
+    x: t.clientX - rect.left,
+    y: t.clientY - rect.top,
+  });
+
+  const onTouchStart = (e: React.TouchEvent) => {
+    const el = wrapRef.current;
+    if (!el) return;
+    const rect = el.getBoundingClientRect();
+
+    if (e.touches.length >= 2) {
+      const a = localPoint(e.touches[0], rect);
+      const b = localPoint(e.touches[1], rect);
+      touchRef.current = {
+        ...touchRef.current,
+        mode: "pinch",
+        sx: 0,
+        sy: 0,
+        startView: view,
+        startDist: distance(a, b),
+      };
+      return;
+    }
+
+    if (e.touches.length !== 1) return;
+    const t = e.touches[0];
+    const target = e.target as HTMLElement;
+    const nodeEl = target.closest("[data-node]") as HTMLElement | null;
+    const onPort = !!target.closest("[data-port]");
+
+    // A tap on a node always selects it, editable or not -- same as
+    // startNodeDrag's mouse path: "Selecting still opens the inspector; only
+    // the move is withheld." While the graph is editable a drag that starts
+    // on a node belongs to that node, exactly as it does for the mouse. With
+    // nothing to drag, panning from anywhere is what a viewer expects --
+    // otherwise a graph whose nodes fill the screen has no background left
+    // to grab.
+    if (nodeEl && !onPort) {
+      const id = nodeEl.getAttribute("data-node");
+      const n = id ? workflow.nodes.find((x) => x.id === id) : undefined;
+      if (n) {
+        setSelectedId(n.id);
+        touchRef.current = editable
+          ? {
+              mode: "node",
+              sx: t.clientX,
+              sy: t.clientY,
+              startView: view,
+              startDist: 0,
+              nodeId: n.id,
+              ox: n.x,
+              oy: n.y,
+            }
+          : { ...touchRef.current, mode: "none" };
+        return;
+      }
+    }
+    // Drawing an edge by touch is not implemented, so a touch on a port does
+    // nothing rather than panning the canvas out from under the finger.
+    if (editable && onPort) return;
+
+    // Same as onBgMouseDown's left-button pan: a tap on empty background
+    // deselects. Without this, the natural "tap outside to dismiss the
+    // inspector" gesture that panning-from-anywhere otherwise supports left
+    // the previously-selected node stuck selected and the inspector open.
+    setSelectedId(null);
+
+    touchRef.current = {
+      ...touchRef.current,
+      mode: "pan",
+      sx: t.clientX,
+      sy: t.clientY,
+      startView: view,
+      startDist: 0,
+    };
+  };
+
+  const onTouchMove = (e: React.TouchEvent) => {
+    const st = touchRef.current;
+    const el = wrapRef.current;
+    if (!el || st.mode === "none") return;
+
+    if (st.mode === "pinch") {
+      if (e.touches.length < 2 || st.startDist <= 0) return;
+      const rect = el.getBoundingClientRect();
+      const a = localPoint(e.touches[0], rect);
+      const b = localPoint(e.touches[1], rect);
+      const m = midpoint(a, b);
+      // Recomputed from the gesture's starting view every frame rather than
+      // accumulated, so a long pinch cannot drift.
+      setView(
+        zoomAbout(
+          st.startView,
+          st.startView.k * (distance(a, b) / st.startDist),
+          m.x,
+          m.y,
+        ),
+      );
+      return;
+    }
+
+    if (e.touches.length !== 1) return;
+    const t = e.touches[0];
+
+    if (st.mode === "node") {
+      // Same arithmetic the mouse drag uses: screen delta divided by the
+      // zoom, so a finger and a cursor move a node by the same amount.
+      const dx = (t.clientX - st.sx) / st.startView.k;
+      const dy = (t.clientY - st.sy) / st.startView.k;
+      setWorkflow((wf) => ({
+        ...wf,
+        nodes: wf.nodes.map((n) =>
+          n.id === st.nodeId ? { ...n, x: st.ox + dx, y: st.oy + dy } : n,
+        ),
+      }));
+      return;
+    }
+
+    setView({
+      ...st.startView,
+      x: st.startView.x + (t.clientX - st.sx),
+      y: st.startView.y + (t.clientY - st.sy),
+    });
+  };
+
+  const onTouchEnd = (e: React.TouchEvent) => {
+    // A lifted finger fires a browser-emulated click on whatever element sat
+    // under it -- harmless over empty background, but a tap that landed on an
+    // edge (edges aren't [data-node], so onTouchStart's node branch doesn't
+    // catch them; they fall to the generic pan case) would otherwise trigger
+    // that edge's onClick={editable ? () => removeEdge(e.id) : undefined} a
+    // moment after our own touch handling already ran, silently deleting it.
+    // Suppressed only when we actually handled this as a gesture of our own
+    // (mode !== "none"); React registers touchstart/touchmove/wheel as
+    // passive listeners by default (preventDefault there is a no-op) but
+    // touchend is not one of them, so this call has real effect.
+    if (touchRef.current.mode !== "none") e.preventDefault();
+
+    if (e.touches.length === 0) {
+      touchRef.current.mode = "none";
+      return;
+    }
+    // Lifting one finger out of a pinch hands the gesture back to pan rather
+    // than ending it, so the graph does not jump.
+    if (e.touches.length === 1) {
+      const t = e.touches[0];
+      touchRef.current = {
+        ...touchRef.current,
+        mode: "pan",
+        sx: t.clientX,
+        sy: t.clientY,
+        startView: view,
+        startDist: 0,
+      };
+    }
+  };
+
+  // Frame the whole graph on first paint. The stored view is whatever the last
+  // editor left behind, and on a narrow screen that regularly puts every node
+  // off-canvas -- the page would open on empty grid with no clue which way to
+  // drag. Runs once, and only once the box has actually been measured.
+  const didFit = useRef(false);
+  useEffect(() => {
+    if (didFit.current) return;
+    if (workflow.nodes.length === 0) return;
+    const rect = wrapRef.current?.getBoundingClientRect();
+    if (!rect || rect.width <= 0 || rect.height <= 0) return;
+    didFit.current = true;
+    fitView();
+  }, [workflow.nodes, fitView]);
+
+  // Places a node so its CENTRE sits at the given point in the canvas box.
+  // Shared by the drop (point = cursor) and the palette tap (point = middle
+  // of the view), so the two cannot drift apart.
+  const addNodeAt = useCallback(
+    (meta: Partial<WorkflowNode>, px: number, py: number) => {
+      const t = NODE_TYPES[meta.type!];
+      const w = screenToWorld(viewRef.current, px, py);
+      const id = `n_${Date.now()}`;
+      const node = {
+        id,
+        x: w.x - (t ? t.w / 2 : 90),
+        y: w.y - (t ? t.h / 2 : 30),
+        ...meta,
+      } as WorkflowNode;
+      setWorkflow((wf) => ({ ...wf, nodes: [...wf.nodes, node] }));
+      setSelectedId(id);
+    },
+    [setWorkflow, setSelectedId],
+  );
+
+  useEffect(() => {
+    if (!addAtCentreRef) return;
+    addAtCentreRef.current = (meta) => {
+      const rect = wrapRef.current?.getBoundingClientRect();
+      if (!rect) return;
+      addNodeAt(meta, rect.width / 2, rect.height / 2);
+    };
+    return () => {
+      addAtCentreRef.current = null;
+    };
+  }, [addAtCentreRef, addNodeAt]);
+
   const onDrop = (e: React.DragEvent) => {
     e.preventDefault();
+    if (!editable) return;
     const data = e.dataTransfer.getData("application/agentmesh");
     if (!data || !wrapRef.current) return;
-    const meta: Partial<WorkflowNode> = JSON.parse(data);
     const rect = wrapRef.current.getBoundingClientRect();
-    const t = NODE_TYPES[meta.type!];
-    const x = (e.clientX - rect.left - view.x) / view.k - (t ? t.w / 2 : 90);
-    const y = (e.clientY - rect.top - view.y) / view.k - (t ? t.h / 2 : 30);
-    const id = `n_${Date.now()}`;
-    const node: WorkflowNode = { id, x, y, ...meta } as WorkflowNode;
-    setWorkflow((wf) => ({ ...wf, nodes: [...wf.nodes, node] }));
-    setSelectedId(id);
+    addNodeAt(
+      JSON.parse(data) as Partial<WorkflowNode>,
+      e.clientX - rect.left,
+      e.clientY - rect.top,
+    );
   };
 
   const startNodeDrag = (e: React.MouseEvent, n: WorkflowNode) => {
@@ -230,6 +517,8 @@ export function CanvasGraph({
     if ((e.target as HTMLElement).closest("[data-port]")) return;
     e.stopPropagation();
     setSelectedId(n.id);
+    // Selecting still opens the inspector; only the move is withheld.
+    if (!editable) return;
     dragRef.current = {
       id: n.id,
       sx: e.clientX,
@@ -245,6 +534,7 @@ export function CanvasGraph({
     fromPort: PortName,
   ) => {
     e.stopPropagation();
+    if (!editable) return;
     const n = workflow.nodes.find((x) => x.id === nodeId);
     if (!n) return;
     const p = portWorld(n, fromPort);
@@ -256,6 +546,10 @@ export function CanvasGraph({
     <div
       ref={wrapRef}
       onMouseDown={onBgMouseDown}
+      onTouchStart={onTouchStart}
+      onTouchMove={onTouchMove}
+      onTouchEnd={onTouchEnd}
+      onTouchCancel={onTouchEnd}
       onDragOver={(e) => e.preventDefault()}
       onDrop={onDrop}
       className="canvas-bg"
@@ -268,6 +562,10 @@ export function CanvasGraph({
         backgroundPosition: `${view.x}px ${view.y}px`,
         cursor: panning ? "grabbing" : "default",
         userSelect: "none",
+        // Without this the browser takes the drag for page scroll and the
+        // pinch for its own page zoom, and the handlers above never see a
+        // usable gesture.
+        touchAction: "none",
       }}
     >
       <div
@@ -308,7 +606,7 @@ export function CanvasGraph({
                 y2={p2.y}
                 kind={e.kind}
                 running={running}
-                onClick={() => removeEdge(e.id)}
+                onClick={editable ? () => removeEdge(e.id) : undefined}
               />
             );
           })}
@@ -367,8 +665,10 @@ export function CanvasGraph({
         }}
       >
         <button
-          onClick={() => setView((v) => ({ ...v, k: Math.min(2, v.k * 1.15) }))}
+          onClick={() => zoomFromCentre(1.15)}
           style={ctrlBtn}
+          aria-label="Zoom in"
+          title="Zoom in"
         >
           +
         </button>
@@ -383,10 +683,10 @@ export function CanvasGraph({
           {Math.round(view.k * 100)}%
         </div>
         <button
-          onClick={() =>
-            setView((v) => ({ ...v, k: Math.max(0.3, v.k / 1.15) }))
-          }
+          onClick={() => zoomFromCentre(1 / 1.15)}
           style={ctrlBtn}
+          aria-label="Zoom out"
+          title="Zoom out"
         >
           −
         </button>
@@ -394,9 +694,10 @@ export function CanvasGraph({
           style={{ height: 1, background: "var(--border)", margin: "2px 0" }}
         />
         <button
-          onClick={() => setView({ x: 40, y: 40, k: 0.95 })}
+          onClick={fitView}
           style={ctrlBtn}
-          title="Reset view"
+          aria-label="Fit workflow to screen"
+          title="Fit to screen"
         >
           ⊡
         </button>
@@ -406,34 +707,49 @@ export function CanvasGraph({
       <div
         style={{
           position: "absolute",
-          bottom: 44,
+          top: 14,
           left: 16,
           zIndex: 4,
+          // Load-bearing at top-left: the row sits over the default view
+          // origin, so without this it would eat the first node's mousedown
+          // on nearly every workflow. The keycaps have no click behavior.
+          pointerEvents: "none",
           display: "flex",
           flexWrap: "wrap",
           columnGap: 12,
           rowGap: 6,
           alignItems: "center",
-          maxWidth: "calc(100% - 96px)",
+          // Nothing sits top-right, unlike the zoom controls the old
+          // bottom-left placement had to wrap away from.
+          maxWidth: "calc(100% - 32px)",
           fontFamily: "var(--font-mono)",
           fontSize: 10,
           color: "var(--fg-dim)",
         }}
       >
-        {[
-          ["drag bg", "pan"],
-          ["scroll", "zoom"],
-          ["drag port", "connect"],
-          ["⌫", "delete node"],
-        ].map(([k, v]) => (
+        {(
+          [
+            ["drag bg", "pan"],
+            ["scroll", "zoom"],
+            ["drag port", "connect"],
+            [<IconBackspace key="bksp" size={12} />, "delete node"],
+          ] as [React.ReactNode, string][]
+        ).map(([k, v]) => (
           <span
-            key={k}
+            key={v}
+            // The visible text no longer spells the key, so name it for
+            // screen readers and anyone who doesn't recognise the glyph.
+            title={v === "delete node" ? "Backspace" : undefined}
             style={{
               display: "inline-flex",
               alignItems: "center",
               gap: 5,
               whiteSpace: "nowrap",
               flexShrink: 0,
+              // The row disables pointer events so it doesn't steal the
+              // first node's mousedown; re-enable them just here so the
+              // title tooltip is actually reachable by hover.
+              pointerEvents: "auto",
             }}
           >
             <span
@@ -562,18 +878,3 @@ function EdgePath({
     </g>
   );
 }
-
-const ctrlBtn: React.CSSProperties = {
-  width: 28,
-  height: 28,
-  display: "flex",
-  alignItems: "center",
-  justifyContent: "center",
-  background: "transparent",
-  border: "none",
-  color: "var(--fg-muted)",
-  cursor: "pointer",
-  fontFamily: "var(--font-mono)",
-  fontSize: 16,
-  borderRadius: "var(--r-1)",
-};

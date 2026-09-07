@@ -30,7 +30,7 @@ func sendElevenLabs(ctx context.Context, node models.WorkflowNode, rc RunContext
 	}
 	voiceID := configVal(node, "elevenlabsVoiceID", "21m00Tcm4TlvDq8ikWAM")
 	target := elevenLabsAPIBase + "/v1/text-to-speech/" + url.PathEscape(voiceID)
-	payload := map[string]any{"text": rc.Message(), "model_id": "eleven_monolingual_v1"}
+	payload := map[string]any{"text": resolveMessage(node, rc), "model_id": "eleven_monolingual_v1"}
 	headers := map[string]string{"xi-api-key": apiKey}
 	req, err := newJSONRequest(ctx, http.MethodPost, target, headers, payload)
 	if err != nil {

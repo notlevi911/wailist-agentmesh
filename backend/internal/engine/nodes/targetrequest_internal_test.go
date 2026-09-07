@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/agentmesh/backend/internal/models"
+	"github.com/agentmesh/backend/internal/prism"
 )
 
 func TestBuildTargetRequestGETUsesQueryString(t *testing.T) {
@@ -310,5 +311,59 @@ func TestBuildTargetRequestParamsModeUnchanged(t *testing.T) {
 	}
 	if got.Endpoint != "https://example.test/resource?url=https%3A%2F%2Fa.test" {
 		t.Fatalf("want the param on the query string, got %s", got.Endpoint)
+	}
+}
+
+// TestPrismConsoleTemplatesExpandToTheDocumentedShape is
+// TestBuildTargetRequestJSONBodyModeProducesPrismShape's counterpart, run
+// against the REAL template the Prism console ships (internal/prism) rather
+// than one written by hand in this file. The hand-written one proves the
+// mechanism works; this one proves the shipped configuration uses it
+// correctly. A template edit that breaks Prism's body now fails here instead
+// of being discovered by a user who paid $1.75 for a rejected request.
+func TestPrismConsoleTemplatesExpandToTheDocumentedShape(t *testing.T) {
+	pdf := base64.StdEncoding.EncodeToString([]byte("%PDF-1.5 fake"))
+
+	for _, e := range prism.Endpoints() {
+		if e.BodyTemplate == "" {
+			continue
+		}
+		node := models.WorkflowNode{
+			BodyMode:     models.BodyModeJSON,
+			BodyTemplate: e.BodyTemplate,
+			CustomParams: []models.CustomParam{
+				{Kind: "text", Name: "task_description", Value: "Senior React Developer"},
+				{Kind: "file", Name: "resume", FileName: "john_doe.pdf", MIMEType: "application/pdf", Value: pdf},
+			},
+		}
+		_, body, contentType, err := buildTargetRequest(node, http.MethodPost)
+		if err != nil {
+			t.Errorf("%s: %v", e.ID, err)
+			continue
+		}
+		if contentType != "application/json" {
+			t.Errorf("%s: content type %q", e.ID, contentType)
+		}
+		var got struct {
+			TaskDescription string `json:"task_description"`
+			Files           []struct {
+				Filename      string `json:"filename"`
+				ContentBase64 string `json:"content_base64"`
+			} `json:"files"`
+		}
+		if err := json.Unmarshal(body, &got); err != nil {
+			t.Errorf("%s: body is not valid JSON: %v (%s)", e.ID, err, body)
+			continue
+		}
+		if got.TaskDescription != "Senior React Developer" {
+			t.Errorf("%s: task_description = %q", e.ID, got.TaskDescription)
+		}
+		if len(got.Files) != 1 {
+			t.Errorf("%s: want one file object, got %d", e.ID, len(got.Files))
+			continue
+		}
+		if got.Files[0].Filename != "john_doe.pdf" || got.Files[0].ContentBase64 != pdf {
+			t.Errorf("%s: file object = %+v", e.ID, got.Files[0])
+		}
 	}
 }

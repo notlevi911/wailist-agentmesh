@@ -9,6 +9,7 @@ import (
 	"log"
 	"net/http"
 	"regexp"
+	"strconv"
 	"strings"
 
 	"github.com/google/uuid"
@@ -134,6 +135,48 @@ func (d *Deps) GetCreditBalance(w http.ResponseWriter, r *http.Request) {
 	respond.JSON(w, http.StatusOK, map[string]any{"credit_usd_micros": balance})
 }
 
+// creditPurchasesDefaultLimit caps an unparameterised billing-history read.
+// Deep history is a rare ask; the page shows a reverse-chronological list and
+// a user looking for one old receipt is better served by a future date filter
+// than by every client paying to transfer a whole ledger on page load.
+const creditPurchasesDefaultLimit = 50
+
+// creditPurchasesMaxLimit bounds ?limit= so a caller cannot ask for an
+// unbounded scan of their own ledger.
+const creditPurchasesMaxLimit = 200
+
+// GetCreditPurchases returns the signed-in user's top-up history from
+// credit_ledger — the authoritative record, replacing the per-browser
+// localStorage copy the billing page used to keep (see
+// db.ListCreditTransactions for why that had to change).
+func (d *Deps) GetCreditPurchases(w http.ResponseWriter, r *http.Request) {
+	userID, _ := r.Context().Value(CtxUserID).(string)
+
+	limit := creditPurchasesDefaultLimit
+	if raw := r.URL.Query().Get("limit"); raw != "" {
+		v, err := strconv.Atoi(raw)
+		// Mirrors UsageSettlements' guard: a negative value parses fine but
+		// would reach the query (and make([]T, 0, v)) as a nonsense capacity.
+		if err != nil || v < 1 {
+			respond.Error(w, http.StatusBadRequest, "limit must be a positive number")
+			return
+		}
+		if v > creditPurchasesMaxLimit {
+			v = creditPurchasesMaxLimit
+		}
+		limit = v
+	}
+
+	txns, err := d.Store.ListCreditTransactions(r.Context(), userID, limit)
+	if err != nil {
+		log.Printf("credit purchases: %v", err)
+		respond.Error(w, http.StatusInternalServerError, "internal error")
+		return
+	}
+
+	respond.JSON(w, http.StatusOK, txns)
+}
+
 // RedeemCoupon credits a signed-in user's balance for a known, unredeemed
 // coupon code. Each code is redeemable once per user (db.RedeemCoupon
 // enforces this via a unique constraint) — a repeat or unknown code is a 4xx,
@@ -150,7 +193,7 @@ func (d *Deps) RedeemCoupon(w http.ResponseWriter, r *http.Request) {
 	}
 	code := strings.ToUpper(strings.TrimSpace(body.Code))
 
-	balance, err := d.Store.RedeemCoupon(r.Context(), userID, code)
+	balance, credited, err := d.Store.RedeemCoupon(r.Context(), userID, code)
 	switch {
 	case errors.Is(err, db.ErrCouponInvalid):
 		respond.Error(w, http.StatusBadRequest, "invalid coupon code")
@@ -164,7 +207,12 @@ func (d *Deps) RedeemCoupon(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	respond.JSON(w, http.StatusOK, map[string]any{"credit_usd_micros": balance})
+	respond.JSON(w, http.StatusOK, map[string]any{
+		"credit_usd_micros": balance,
+		// What this specific code granted, so the UI can report the amount added
+		// instead of assuming a fixed one — coupon values are configuration now.
+		"credited_usd_micros": credited,
+	})
 }
 
 // VerifyCashfreePayment is called by the frontend after the Cashfree JS SDK
@@ -411,4 +459,37 @@ func (d *Deps) NOWPaymentsWebhook(w http.ResponseWriter, r *http.Request) {
 	default:
 		respond.JSON(w, http.StatusOK, map[string]string{"status": "ignored"})
 	}
+}
+
+// PaymentProviders reports which checkout providers this deployment can
+// actually take money through, and the rate needed to price the USD ones.
+//
+// The frontend used to hardcode availability, which meant a deployment whose
+// FX lookup was failing still offered a crypto top-up that could only fail at
+// invoice creation. Cashfree charges in INR and needs no rate; NOWPayments
+// quotes in USD, so it is only offerable when a rate is available.
+func (d *Deps) PaymentProviders(w http.ResponseWriter, r *http.Request) {
+	// The top-up UI is denominated in rupees while NOWPayments settles in USD,
+	// so the frontend has to convert. Serving the same rate the Cashfree path
+	// pins into its ledger row keeps the two from disagreeing -- the
+	// frontend's own fx.ts constant is a mock (a fixed 1/83) and would quote a
+	// price that drifts from what is actually charged.
+	//
+	// Cached, because this is hit on every billing page mount and a live fetch
+	// per request put a third-party host on the critical path of a page load.
+	rate, stale, err := payments.CachedINRToUSDRate(r.Context())
+	if err != nil {
+		log.Printf("payment providers: fx rate: %v", err)
+	} else if stale {
+		log.Printf("payment providers: serving a stale fx rate (%v) — refresh is failing", rate)
+	}
+	usdPriceable := err == nil && rate > 0
+
+	respond.JSON(w, http.StatusOK, map[string]any{
+		"usd_per_inr": rate,
+		"providers": []map[string]any{
+			{"id": "cashfree", "enabled": true, "currency": "INR"},
+			{"id": "nowpayments", "enabled": usdPriceable, "currency": "USD"},
+		},
+	})
 }

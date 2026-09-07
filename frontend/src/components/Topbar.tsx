@@ -3,11 +3,10 @@ import { useState, useEffect, useCallback, useRef } from "react";
 import { useRouter, usePathname } from "next/navigation";
 import { Logo, Pill, Hairline, ghostBtnSm } from "@/components/ui";
 import { useAuth } from "@/hooks/useAuth";
-
-// Which chain settlements actually run on. Mainnet is the default because
-// that is what the platform runs; overridable so a genuine testnet
-// deployment doesn't have to lie in the other direction.
-const ALGORAND_NETWORK = process.env.NEXT_PUBLIC_ALGORAND_NETWORK ?? "mainnet";
+import { AppNav } from "@/components/nav/AppNav";
+import { APP_NAV_ITEMS, type NavItem } from "@/lib/nav";
+import { can } from "@/lib/readonly";
+import { useReadOnly } from "@/hooks/useReadOnly";
 
 // Shared application top bar. Rendered identically on every authed page so the
 // brand cluster, primary navigation, and account menu never drift between routes.
@@ -15,6 +14,7 @@ export function Topbar() {
   const router = useRouter();
   const pathname = usePathname();
   const { signOut, user, completeOnboarding } = useAuth();
+  const readOnly = useReadOnly();
 
   // Avatar shows the first letter of the signed-in user's name, falling back
   // to the email local part while auth is still loading or for an OAuth
@@ -84,156 +84,152 @@ export function Topbar() {
   };
 
   return (
-    <div
-      style={{
-        height: 56,
-        flexShrink: 0,
-        background: "var(--bg-elev-1)",
-        borderBottom: "1px solid var(--border)",
-        padding: "0 24px",
-        display: "flex",
-        alignItems: "center",
-        gap: 20,
-      }}
-    >
-      {/* Brand + workspace context — one visual group */}
-      <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-        <button
-          onClick={() => router.push("/")}
-          style={{
-            background: "transparent",
-            border: "none",
-            cursor: "pointer",
-            padding: 0,
-          }}
-        >
-          <Logo size={18} />
-        </button>
-        <Hairline vertical length={22} />
-        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-          <button style={ghostBtnSm}>{orgName} ▾</button>
-          <Pill mono dot tone="warm">
-            {ALGORAND_NETWORK}
-          </Pill>
-        </div>
-      </div>
-      <div style={{ flex: 1 }} />
-      {/* Navigation + account — the other group */}
-      <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-        <nav style={{ display: "inline-flex", alignItems: "center", gap: 2 }}>
-          <NavLink
-            label="Workflows"
-            active={pathname.startsWith("/workflows")}
-            onClick={() => router.push("/workflows")}
-          />
-          <NavLink
-            label="Usage"
-            active={pathname.startsWith("/usage")}
-            onClick={() => router.push("/usage")}
-          />
-          <NavLink
-            label="Credits"
-            active={pathname.startsWith("/billing")}
-            onClick={() => router.push("/billing")}
-          />
-        </nav>
-        <Hairline vertical length={22} />
-        <div
-          className="profile-menu"
-          ref={menuRef}
-          onPointerEnter={onMenuPointerEnter}
-          onPointerLeave={onMenuPointerLeave}
-        >
-          <button
-            className="profile-menu__trigger"
-            aria-haspopup="menu"
-            aria-expanded={menuOpen}
-            aria-label="Account menu"
-            onClick={() =>
-              setMenuState((s) => (s === "pinned" ? "closed" : "pinned"))
-            }
-          >
-            {initial}
-          </button>
-          {menuOpen && (
-            <div className="profile-menu__panel" role="menu">
-              <div className="profile-menu__card">
-                <div
-                  style={{
-                    padding: "12px 14px",
-                    display: "flex",
-                    alignItems: "center",
-                    gap: 10,
-                  }}
-                >
-                  <div
-                    style={{
-                      width: 28,
-                      height: 28,
-                      borderRadius: 999,
-                      background: "var(--accent)",
-                      color: "var(--accent-fg)",
-                      display: "inline-flex",
-                      alignItems: "center",
-                      justifyContent: "center",
-                      fontSize: 11,
-                      fontWeight: 700,
-                      flexShrink: 0,
-                    }}
-                  >
-                    {initial}
-                  </div>
-                  <div style={{ minWidth: 0 }}>
+    <>
+      <AppNav
+        items={APP_NAV_ITEMS}
+        pathname={pathname}
+        onSelect={(item: NavItem) => {
+          if (item.href) router.push(item.href);
+        }}
+        renderInlineLink={({ item, active, onClick }) => (
+          <NavLink label={item.label} active={active} onClick={onClick} />
+        )}
+        brand={
+          <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+            <button
+              onClick={() => router.push("/")}
+              style={{
+                background: "transparent",
+                border: "none",
+                cursor: "pointer",
+                padding: 0,
+              }}
+            >
+              <Logo size={18} />
+            </button>
+            <Hairline vertical length={22} />
+            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              {/* Workspace switcher drops out on narrow screens — it is the widest
+                element in the cluster and the least load-bearing. */}
+              <button className="hide-md" style={ghostBtnSm}>
+                {orgName} ▾
+              </button>
+            </div>
+            {/* Deliberately OUTSIDE the context cluster above. This pill is not
+              context -- it is the explanation for why the create/deploy
+              controls are missing, and a phone is where it is needed most.
+              Collapsing it with the workspace switcher left a viewer on a
+              narrow screen with the controls gone and nothing saying why. */}
+            {!can("workflow.editGraph", readOnly) && (
+              <span title="Editing happens in the AgentMesh desktop app.">
+                <Pill mono dot tone="warm">
+                  viewing only
+                </Pill>
+              </span>
+            )}
+          </div>
+        }
+        actions={
+          <>
+            {/* Separates wayfinding from identity. Drops out with the inline
+              links, so the avatar is not left trailing a stray rule. */}
+            <Hairline className="hide-md" vertical length={22} />
+            <div
+              className="profile-menu"
+              ref={menuRef}
+              onPointerEnter={onMenuPointerEnter}
+              onPointerLeave={onMenuPointerLeave}
+            >
+              <button
+                className="profile-menu__trigger"
+                aria-haspopup="true"
+                aria-expanded={menuOpen}
+                aria-label="Account menu"
+                onClick={() =>
+                  setMenuState((s) => (s === "pinned" ? "closed" : "pinned"))
+                }
+              >
+                {initial}
+              </button>
+              {menuOpen && (
+                <div className="profile-menu__panel">
+                  <div className="profile-menu__card">
                     <div
                       style={{
-                        fontSize: 13,
-                        fontWeight: 600,
-                        color: "var(--fg)",
+                        padding: "12px 14px",
+                        display: "flex",
+                        alignItems: "center",
+                        gap: 10,
                       }}
                     >
-                      {user?.name?.trim() || "—"}
+                      <div
+                        style={{
+                          width: 28,
+                          height: 28,
+                          borderRadius: 999,
+                          background: "var(--accent)",
+                          color: "var(--accent-fg)",
+                          display: "inline-flex",
+                          alignItems: "center",
+                          justifyContent: "center",
+                          fontSize: 11,
+                          fontWeight: 700,
+                          flexShrink: 0,
+                        }}
+                      >
+                        {initial}
+                      </div>
+                      <div style={{ minWidth: 0 }}>
+                        <div
+                          style={{
+                            fontSize: 13,
+                            fontWeight: 600,
+                            color: "var(--fg)",
+                          }}
+                        >
+                          {user?.name?.trim() || "—"}
+                        </div>
+                        <div
+                          style={{
+                            fontSize: 11,
+                            color: "var(--fg-dim)",
+                            overflow: "hidden",
+                            textOverflow: "ellipsis",
+                            whiteSpace: "nowrap",
+                          }}
+                        >
+                          {user?.email ?? "—"}
+                        </div>
+                      </div>
                     </div>
-                    <div
-                      style={{
-                        fontSize: 11,
-                        color: "var(--fg-dim)",
-                        overflow: "hidden",
-                        textOverflow: "ellipsis",
-                        whiteSpace: "nowrap",
+                    <div className="profile-menu__divider" />
+                    <button
+                      className="profile-menu__item"
+                      onClick={() => setMenuState("closed")}
+                    >
+                      Settings
+                    </button>
+                    <div className="profile-menu__divider" />
+                    <button
+                      className="profile-menu__item profile-menu__item--danger"
+                      onClick={() => {
+                        setMenuState("closed");
+                        handleSignOut();
                       }}
                     >
-                      {user?.email ?? "—"}
-                    </div>
+                      Sign out
+                    </button>
                   </div>
                 </div>
-                <div className="profile-menu__divider" />
-                <button
-                  className="profile-menu__item"
-                  role="menuitem"
-                  onClick={() => setMenuState("closed")}
-                >
-                  Settings
-                </button>
-                <div className="profile-menu__divider" />
-                <button
-                  className="profile-menu__item profile-menu__item--danger"
-                  role="menuitem"
-                  onClick={() => {
-                    setMenuState("closed");
-                    handleSignOut();
-                  }}
-                >
-                  Sign out
-                </button>
-              </div>
+              )}
             </div>
-          )}
-        </div>
-      </div>
+          </>
+        }
+      />
       {user?.needsOnboarding && (
         <OnboardingModal onComplete={completeOnboarding} />
       )}
-    </div>
+    </>
   );
 }
 
@@ -303,9 +299,7 @@ function OnboardingModal({
             Tell us who you are so your teammates recognize you.
           </div>
         </div>
-        <label
-          style={{ display: "flex", flexDirection: "column", gap: 6 }}
-        >
+        <label style={{ display: "flex", flexDirection: "column", gap: 6 }}>
           <span style={{ fontSize: 12, color: "var(--fg-muted)" }}>
             Full name
           </span>
@@ -318,9 +312,7 @@ function OnboardingModal({
             style={onboardingInputStyle}
           />
         </label>
-        <label
-          style={{ display: "flex", flexDirection: "column", gap: 6 }}
-        >
+        <label style={{ display: "flex", flexDirection: "column", gap: 6 }}>
           <span style={{ fontSize: 12, color: "var(--fg-muted)" }}>
             Organization (optional)
           </span>
@@ -390,6 +382,7 @@ function NavLink({
 }) {
   return (
     <button
+      className="am-nav-link"
       onClick={onClick}
       aria-current={active ? "page" : undefined}
       onMouseEnter={(e) => {
@@ -399,8 +392,6 @@ function NavLink({
         if (!active) e.currentTarget.style.background = "transparent";
       }}
       style={{
-        height: 28,
-        padding: "0 12px",
         fontSize: 12.5,
         fontWeight: 500,
         background: active ? "var(--bg-elev-3)" : "transparent",

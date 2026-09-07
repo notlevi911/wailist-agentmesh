@@ -1,0 +1,27 @@
+{
+  "name": "agentmesh-mobile",
+  "version": "0.1.0",
+  "private": true,
+  "description": "AgentMesh native Android shell: workflow viewer/controller and background geofence trigger client.",
+  "scripts": {
+    "build:web": "cross-env MOBILE_BUILD=1 NEXT_PUBLIC_NATIVE_CLIENT=1 npm --prefix ../frontend run build",
+    "copy:web": "node scripts/copy-web.mjs",
+    "sync": "npm run build:web && npm run copy:web && cap sync android",
+    "open:android": "cap open android",
+    "run:android": "npm run sync && cap run android",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@capacitor/android": "^8.5.1",
+    "@capacitor/app": "^8.1.1",
+    "@capacitor/core": "^8.5.0",
+    "@capacitor/network": "^8.0.1",
+    "@capacitor/preferences": "^8.0.1",
+    "@capacitor/push-notifications": "^8.1.2"
+  },
+  "devDependencies": {
+    "@capacitor/cli": "^8.5.0",
+    "cross-env": "^10.1.0",
+    "typescript": "^5"
+  }
+}

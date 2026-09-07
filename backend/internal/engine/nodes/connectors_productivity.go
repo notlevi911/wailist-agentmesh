@@ -23,7 +23,12 @@ func SetNotionAPIBaseForTest(base string) {
 }
 
 func sendNotion(ctx context.Context, node models.WorkflowNode, rc RunContexter) (any, error) {
-	apiKey := secretVal(node, "notionAPIKey")
+	// OAuth-linked token takes priority: Notion's OAuth access token works
+	// identically to a manual internal integration secret here (same Bearer scheme).
+	apiKey := secretVal(node, "notionOAuthAccessToken")
+	if apiKey == "" {
+		apiKey = secretVal(node, "notionAPIKey")
+	}
 	if apiKey == "" {
 		return "notion_skipped_no_api_key", ErrActionSkipped
 	}
@@ -39,7 +44,7 @@ func sendNotion(ctx context.Context, node models.WorkflowNode, rc RunContexter) 
 			"paragraph": map[string]any{
 				"rich_text": []map[string]any{{
 					"type": "text",
-					"text": map[string]any{"content": rc.Message()},
+					"text": map[string]any{"content": resolveMessage(node, rc)},
 				}},
 			},
 		}},
@@ -69,7 +74,12 @@ func SetAirtableAPIBaseForTest(base string) {
 }
 
 func sendAirtable(ctx context.Context, node models.WorkflowNode, rc RunContexter) (any, error) {
-	apiKey := secretVal(node, "airtableAPIKey")
+	// OAuth-linked token takes priority: Airtable's OAuth access token works
+	// identically to a manual personal access token here (same Bearer scheme).
+	apiKey := secretVal(node, "airtableOAuthAccessToken")
+	if apiKey == "" {
+		apiKey = secretVal(node, "airtableAPIKey")
+	}
 	if apiKey == "" {
 		return "airtable_skipped_no_api_key", ErrActionSkipped
 	}
@@ -80,7 +90,7 @@ func sendAirtable(ctx context.Context, node models.WorkflowNode, rc RunContexter
 	}
 	fieldName := configVal(node, "airtableFieldName", "Notes")
 	target := airtableAPIBase + "/v0/" + url.PathEscape(baseID) + "/" + url.PathEscape(table)
-	payload := map[string]any{"fields": map[string]any{fieldName: rc.Message()}}
+	payload := map[string]any{"fields": map[string]any{fieldName: resolveMessage(node, rc)}}
 	headers := map[string]string{"Authorization": "Bearer " + apiKey}
 	return postJSON(ctx, target, headers, payload, "airtable_record_created", "Airtable")
 }
@@ -115,7 +125,7 @@ func sendTrello(ctx context.Context, node models.WorkflowNode, rc RunContexter) 
 	q.Set("key", apiKey)
 	q.Set("token", token)
 	target := trelloAPIBase + "/1/cards?" + q.Encode()
-	msg := rc.Message()
+	msg := resolveMessage(node, rc)
 	payload := map[string]any{
 		"idList": listID,
 		"name":   issueTitle(msg),
@@ -138,7 +148,12 @@ func SetAsanaAPIBaseForTest(base string) {
 }
 
 func sendAsana(ctx context.Context, node models.WorkflowNode, rc RunContexter) (any, error) {
-	apiKey := secretVal(node, "asanaAPIKey")
+	// OAuth-linked token takes priority: Asana's OAuth access token works
+	// identically to a manual personal access token here (same Bearer scheme).
+	apiKey := secretVal(node, "asanaOAuthAccessToken")
+	if apiKey == "" {
+		apiKey = secretVal(node, "asanaAPIKey")
+	}
 	if apiKey == "" {
 		return "asana_skipped_no_api_key", ErrActionSkipped
 	}
@@ -146,7 +161,7 @@ func sendAsana(ctx context.Context, node models.WorkflowNode, rc RunContexter) (
 	if projectID == "" {
 		return "asana_skipped_no_project_id", ErrActionSkipped
 	}
-	msg := rc.Message()
+	msg := resolveMessage(node, rc)
 	payload := map[string]any{
 		"data": map[string]any{
 			"name":     issueTitle(msg),
@@ -172,8 +187,15 @@ func SetClickUpAPIBaseForTest(base string) {
 }
 
 func sendClickUp(ctx context.Context, node models.WorkflowNode, rc RunContexter) (any, error) {
+	// Unlike Notion/Airtable/Asana above, ClickUp's manual personal-token and
+	// OAuth-token headers are NOT the same scheme: personal tokens go raw with
+	// no prefix (see the apiKey branch below, untouched), while ClickUp's docs
+	// specify "Authorization: Bearer {access_token}" for OAuth-issued tokens.
+	// So this can't share one headers construction across both paths the way
+	// the other connectors do.
+	oauthToken := secretVal(node, "clickupOAuthAccessToken")
 	apiKey := secretVal(node, "clickupAPIKey")
-	if apiKey == "" {
+	if oauthToken == "" && apiKey == "" {
 		return "clickup_skipped_no_api_key", ErrActionSkipped
 	}
 	listID := configVal(node, "clickupListID", "")
@@ -181,9 +203,14 @@ func sendClickUp(ctx context.Context, node models.WorkflowNode, rc RunContexter)
 		return "clickup_skipped_no_list_id", ErrActionSkipped
 	}
 	target := clickupAPIBase + "/api/v2/list/" + url.PathEscape(listID) + "/task"
-	msg := rc.Message()
+	msg := resolveMessage(node, rc)
 	payload := map[string]any{"name": issueTitle(msg), "description": msg}
-	headers := map[string]string{"Authorization": apiKey}
+	var headers map[string]string
+	if oauthToken != "" {
+		headers = map[string]string{"Authorization": "Bearer " + oauthToken}
+	} else {
+		headers = map[string]string{"Authorization": apiKey}
+	}
 	return postJSON(ctx, target, headers, payload, "clickup_task_created", "ClickUp")
 }
 
@@ -201,11 +228,16 @@ func SetTodoistAPIBaseForTest(base string) {
 }
 
 func sendTodoist(ctx context.Context, node models.WorkflowNode, rc RunContexter) (any, error) {
-	apiKey := secretVal(node, "todoistAPIKey")
+	// OAuth-linked token takes priority: Todoist's OAuth access token works
+	// identically to a manual personal API token here (same Bearer scheme).
+	apiKey := secretVal(node, "todoistOAuthAccessToken")
+	if apiKey == "" {
+		apiKey = secretVal(node, "todoistAPIKey")
+	}
 	if apiKey == "" {
 		return "todoist_skipped_no_api_key", ErrActionSkipped
 	}
-	msg := rc.Message()
+	msg := resolveMessage(node, rc)
 	payload := map[string]any{"content": issueTitle(msg), "description": msg}
 	if projectID := configVal(node, "todoistProjectID", ""); projectID != "" {
 		payload["project_id"] = projectID

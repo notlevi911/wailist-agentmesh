@@ -233,24 +233,37 @@ func redeemCoupon(t *testing.T, d *handlers.Deps, userID, code string) (int, map
 	return w.Code, resp
 }
 
+// Codes come from configuration now (COUPON_CODES), so these tests install
+// their own catalog rather than depending on a hardcoded one.
+func withTestCoupons(d *handlers.Deps) {
+	d.Store.SetCouponCatalog(map[string]int64{
+		"TESTCODEA": 5_000_000,
+		"TESTCODEB": 5_000_000,
+	})
+}
+
 func TestRedeemCouponCreditsBalanceOnce(t *testing.T) {
 	d := testDeps(t)
+	withTestCoupons(d)
 	email := fmt.Sprintf("coupon-test-%d@example.com", time.Now().UnixNano())
 	user, err := d.Store.CreateUser(context.Background(), email, "hash")
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	code, status := redeemCoupon(t, d, user.ID, "AYASHISGAY6969")
+	code, status := redeemCoupon(t, d, user.ID, "TESTCODEA")
 	if code != http.StatusOK {
 		t.Fatalf("want 200 got %d (%v)", code, status)
 	}
 	if got := status["credit_usd_micros"].(float64); got != 5_000_000 {
 		t.Fatalf("want balance 5000000 got %v", got)
 	}
+	if got := status["credited_usd_micros"].(float64); got != 5_000_000 {
+		t.Fatalf("want credited 5000000 got %v", got)
+	}
 
 	// Same code again: rejected, balance unchanged.
-	code, status = redeemCoupon(t, d, user.ID, "AYASHISGAY6969")
+	code, status = redeemCoupon(t, d, user.ID, "TESTCODEA")
 	if code != http.StatusConflict {
 		t.Fatalf("want 409 got %d (%v)", code, status)
 	}
@@ -265,16 +278,17 @@ func TestRedeemCouponCreditsBalanceOnce(t *testing.T) {
 
 func TestRedeemCouponStacksAcrossDistinctCodes(t *testing.T) {
 	d := testDeps(t)
+	withTestCoupons(d)
 	email := fmt.Sprintf("coupon-stack-test-%d@example.com", time.Now().UnixNano())
 	user, err := d.Store.CreateUser(context.Background(), email, "hash")
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	if code, status := redeemCoupon(t, d, user.ID, "AYASHISGAY6969"); code != http.StatusOK {
+	if code, status := redeemCoupon(t, d, user.ID, "TESTCODEA"); code != http.StatusOK {
 		t.Fatalf("want 200 got %d (%v)", code, status)
 	}
-	code, status := redeemCoupon(t, d, user.ID, "INNOFUSIONFTW")
+	code, status := redeemCoupon(t, d, user.ID, "TESTCODEB")
 	if code != http.StatusOK {
 		t.Fatalf("want 200 got %d (%v)", code, status)
 	}
@@ -285,6 +299,7 @@ func TestRedeemCouponStacksAcrossDistinctCodes(t *testing.T) {
 
 func TestRedeemCouponRejectsUnknownCode(t *testing.T) {
 	d := testDeps(t)
+	withTestCoupons(d)
 	email := fmt.Sprintf("coupon-invalid-test-%d@example.com", time.Now().UnixNano())
 	user, err := d.Store.CreateUser(context.Background(), email, "hash")
 	if err != nil {
@@ -293,6 +308,22 @@ func TestRedeemCouponRejectsUnknownCode(t *testing.T) {
 
 	code, status := redeemCoupon(t, d, user.ID, "NOTAREALCODE")
 	if code != http.StatusBadRequest {
+		t.Fatalf("want 400 got %d (%v)", code, status)
+	}
+}
+
+// An unconfigured catalog (COUPON_CODES unset) must reject everything rather
+// than falling back to any built-in code.
+func TestRedeemCouponRejectsEveryCodeWhenCatalogEmpty(t *testing.T) {
+	d := testDeps(t)
+	d.Store.SetCouponCatalog(nil)
+	email := fmt.Sprintf("coupon-empty-test-%d@example.com", time.Now().UnixNano())
+	user, err := d.Store.CreateUser(context.Background(), email, "hash")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if code, status := redeemCoupon(t, d, user.ID, "TESTCODEA"); code != http.StatusBadRequest {
 		t.Fatalf("want 400 got %d (%v)", code, status)
 	}
 }

@@ -25,6 +25,7 @@ func TestBillableFlatFee(t *testing.T) {
 		{"end is free", models.NodeTypeEnd, "", false},
 		{"provider is free", models.NodeTypeProvider, "", false},
 		{"tool402 is handled separately, not flat-fee billable", models.NodeTypeTool402, "", false},
+		{"google (gmail/sheets/calendar/drive) is billable like any connector", models.NodeTypeGoogle, "gmail_send", true},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

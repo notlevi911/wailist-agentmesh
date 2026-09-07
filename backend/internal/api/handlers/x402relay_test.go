@@ -229,6 +229,24 @@ func TestX402RelayBazaarExtensionIsSchemaValid(t *testing.T) {
 	if output == nil || output["type"] != "json" || output["example"] == nil {
 		t.Fatalf("want extensions.bazaar.info.output={type:\"json\",example:{...}}, got %v", output)
 	}
+
+	// The validator's other exact-match requirement, asserted here on the
+	// bytes this route really serves rather than only on the shared builder
+	// (nodes.BazaarDiscoveryExtension, covered in that package's own tests):
+	// the schema's method enum has to hold exactly the method info declares,
+	// not a superset of it. Declaring "GET" against enum
+	// ["GET","HEAD","DELETE"] is what the x402 Doctor reported as
+	// "bazaar.schema method enum must match the declared method", and it cost
+	// every settlement its catalog entry while verify and settle both
+	// reported success.
+	schemaProps, _ := body.Extensions.Bazaar.Schema["properties"].(map[string]any)
+	inputSchema, _ := schemaProps["input"].(map[string]any)
+	inputProps, _ := inputSchema["properties"].(map[string]any)
+	methodSchema, _ := inputProps["method"].(map[string]any)
+	enum, _ := methodSchema["enum"].([]any)
+	if len(enum) != 1 || enum[0] != input["method"] {
+		t.Fatalf("want the schema method enum to hold exactly the declared method %v, got %v", input["method"], methodSchema["enum"])
+	}
 }
 
 // TestX402RelayAcceptsPaymentSignatureHeader is a reproduce-then-fix
@@ -1152,5 +1170,59 @@ func TestX402RelayRecordsFailedWhenTargetRejectsOutboundPayment(t *testing.T) {
 	}
 	if row.Status != "failed" {
 		t.Fatalf("want the outbound settlement recorded as failed when the target rejects the payment, got status %q", row.Status)
+	}
+}
+
+// TestX402RelayForwardsTargetAuthHeader confirms a bearer the TARGET needs
+// (Tendril's lease token, carried via X-Relay-Auth) reaches the target as a
+// real Authorization header, and that its absence sets no Authorization
+// header at all — this exercises the unauthenticated challenge-probe leg
+// (relayInboundChallenge -> fetchTargetPriceQuote), which needs no
+// facilitator or wallet signer to reach.
+func TestX402RelayForwardsTargetAuthHeader(t *testing.T) {
+	var gotAuth string
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotAuth = r.Header.Get("Authorization")
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusPaymentRequired)
+		json.NewEncoder(w).Encode(map[string]any{
+			"x402Version": 2,
+			"accepts": []map[string]any{{
+				"scheme":            "exact",
+				"network":           "algorand:SGO1GKSzyE7IEPItTxCByw9x8FmnrCDexi9/cOUJOiI=",
+				"maxAmountRequired": "100000",
+				"payTo":             "TARGETADDR",
+				"asset":             "10458941",
+			}},
+		})
+	}))
+	defer target.Close()
+
+	d := &handlers.Deps{
+		PlatformWalletAddress: "PLATFORMADDR",
+		USDCAssetID:           10458941,
+		RelayNetwork:          "algorand:SGO1GKSzyE7IEPItTxCByw9x8FmnrCDexi9/cOUJOiI=",
+		RelayFeePayer:         "FEEPAYERADDR",
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/x402/relay?target="+target.URL, nil)
+	req.Header.Set("X-Relay-Auth", "tok")
+	w := httptest.NewRecorder()
+	d.X402Relay(w, req)
+	if w.Code != http.StatusPaymentRequired {
+		t.Fatalf("want 402, got %d: %s", w.Code, w.Body.String())
+	}
+	if gotAuth != "Bearer tok" {
+		t.Errorf("target Authorization = %q, want %q", gotAuth, "Bearer tok")
+	}
+
+	req2 := httptest.NewRequest(http.MethodGet, "/x402/relay?target="+target.URL, nil)
+	w2 := httptest.NewRecorder()
+	d.X402Relay(w2, req2)
+	if w2.Code != http.StatusPaymentRequired {
+		t.Fatalf("want 402, got %d: %s", w2.Code, w2.Body.String())
+	}
+	if gotAuth != "" {
+		t.Errorf("target Authorization = %q, want none without X-Relay-Auth", gotAuth)
 	}
 }

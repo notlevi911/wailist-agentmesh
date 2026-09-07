@@ -120,12 +120,17 @@ func (d *Deps) X402Relay(w http.ResponseWriter, r *http.Request) {
 	// content type carries the boundary token generated when it was built,
 	// which cannot be reconstructed here.
 	targetContentType := r.Header.Get("X-Relay-Content-Type")
+	// A bearer the TARGET requires (Tendril's lease token, for example).
+	// Named X-Relay-Auth rather than Authorization so it can never be
+	// confused with auth for the relay itself, which is unauthenticated and
+	// a wholly different trust boundary.
+	targetAuth := r.Header.Get("X-Relay-Auth")
 
 	if !hasPayment {
-		d.relayInboundChallenge(w, r, target, targetMethod, targetBody, targetContentType)
+		d.relayInboundChallenge(w, r, target, targetMethod, targetBody, targetContentType, targetAuth)
 		return
 	}
-	d.relaySettleAndForward(w, r, target, xPayment, targetMethod, targetBody, targetContentType)
+	d.relaySettleAndForward(w, r, target, xPayment, targetMethod, targetBody, targetContentType, targetAuth)
 }
 
 // incomingPaymentJSON reads the caller's payment off whichever header they
@@ -375,6 +380,26 @@ func (d *Deps) X402RunFundingInfo(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// X402PlatformFeeInfo is X402RunFundingInfo's counterpart for
+// nodes.SettlePlatformFee's PaymentRequirements.Resource — same rationale,
+// a real reachable route rather than an opaque identifier, registered at
+// nodes.platformFeePublicPath.
+func (d *Deps) X402PlatformFeeInfo(w http.ResponseWriter, r *http.Request) {
+	respond.JSON(w, http.StatusOK, map[string]string{
+		"description": "AgentMesh platform fee — internal settlement of the flat per-call markup, not directly payable via this route",
+	})
+}
+
+// X402RunTotalInfo is X402RunFundingInfo's counterpart for
+// nodes.SettleRunTotal's PaymentRequirements.Resource — same rationale, a
+// real reachable route rather than an opaque identifier, registered at
+// nodes.runTotalPublicPath.
+func (d *Deps) X402RunTotalInfo(w http.ResponseWriter, r *http.Request) {
+	respond.JSON(w, http.StatusOK, map[string]string{
+		"description": "AgentMesh workflow run total — internal lump-sum settlement of a run's platform-billed work, not directly payable via this route",
+	})
+}
+
 // targetPriceQuote is the subset of a target's x402 402 response the relay
 // cares about.
 type targetPriceQuote struct {
@@ -415,7 +440,7 @@ type targetPriceQuote struct {
 // second time, draining the platform wallet for more than was ever collected
 // from the caller. relaySettleAndForward fetches the quote exactly once per
 // relay cycle and passes that same value into payTargetAndRespond.
-func fetchTargetPriceQuote(ctx context.Context, target, method string, body []byte, contentType string) (targetPriceQuote, error) {
+func fetchTargetPriceQuote(ctx context.Context, target, method string, body []byte, contentType, targetAuth string) (targetPriceQuote, error) {
 	var bodyReader io.Reader
 	if method != http.MethodGet && len(body) > 0 {
 		bodyReader = bytes.NewReader(body)
@@ -429,6 +454,9 @@ func fetchTargetPriceQuote(ctx context.Context, target, method string, body []by
 			contentType = "application/json"
 		}
 		req.Header.Set("Content-Type", contentType)
+	}
+	if targetAuth != "" {
+		req.Header.Set("Authorization", "Bearer "+targetAuth)
 	}
 	resp, err := nodes.SafeHTTPClient().Do(req)
 	if err != nil {
@@ -519,17 +547,13 @@ func resourceInfo(url, description string) map[string]any {
 	}
 }
 
-// bazaarDiscoveryExtension builds a schema-valid `extensions.bazaar`
-// declaration ({info, schema} both required, info.input.type set) — also
-// decompiled from @x402/extensions v2.20 (declareDiscoveryExtension /
-// validateDiscoveryExtensionSpec). The facilitator runs this exact shape
-// through an ajv validator (extractDiscoveryInfo -> validateDiscoveryExtension)
-// before ever building a catalog entry; the extension this handler emitted
-// before this fix had no `schema` sibling and no `info.input.type` at all,
-// which fails that validation unconditionally — so even a payment that
-// correctly echoed back a top-level `resource` (see resourceInfo above)
-// would still never catalog, because the extension itself was being silently
-// rejected before discoveryInfo was ever set.
+// bazaarDiscoveryExtension fills in the relay's own route-specific half of a
+// Bazaar discovery declaration and hands the rest to
+// nodes.BazaarDiscoveryExtension, which owns the schema skeleton and the
+// validator's hard requirements ({info, schema} both present, info.input.type
+// set, the method enum agreeing with the declared method). See that function
+// for why each of those matters — both are failures the facilitator reports
+// as success while silently declining to catalog anything.
 //
 // Describes the relay's own pass-through shape (any downstream target URL
 // in, that target's own response out) since this endpoint has no fixed
@@ -540,82 +564,41 @@ func resourceInfo(url, description string) map[string]any {
 // facilitator only catalogs a route once it sees this on a real settlement,
 // not from the informational challenge alone.
 func bazaarDiscoveryExtension(target string) map[string]any {
-	input := map[string]any{"type": "http", "method": "GET"}
-	inputSchemaProps := map[string]any{
-		"type":   map[string]any{"type": "string", "const": "http"},
-		"method": map[string]any{"type": "string", "enum": []string{"GET", "HEAD", "DELETE"}},
+	// queryParams and outputExample are the only two things that vary
+	// between the self-listing and a ?target= relay; the method, the schema
+	// skeleton, and the enum that has to agree with the method all come from
+	// nodes.BazaarDiscoveryExtension. outputExample itself is optional per
+	// the real spec (only `input` is in the schema's own `required` list) --
+	// sent anyway because every live, genuinely-cataloged entry pulled from
+	// the real facilitator (facilitator.goplausible.xyz/discovery/resources)
+	// has one, so this closes the one structural gap left between our
+	// declaration and a real working example.
+	decl := nodes.BazaarDeclaration{
+		// MUST stay the public path (relayPublicPath), not this backend's
+		// own internal route. routeTemplate exists so the facilitator can
+		// canonicalize the resource as origin+routeTemplate instead of
+		// origin+request-pathname -- so a stale value here doesn't just
+		// mislabel, it names a URL that does not exist. Hardcoding
+		// "/x402/relay" while resource.url moved to the /api proxy
+		// produced exactly that: origin+routeTemplate resolved to
+		// https://www.agent-mesh.app/x402/relay, a confirmed 404, since
+		// Vercel only rewrites /api/*. Derived from the same constant as
+		// the URL itself so the two cannot drift again.
+		RouteTemplate: relayPublicPath,
+		OutputExample: map[string]any{"service": "AgentMesh x402 relay", "docs": true, "txId": "..."},
 	}
-	required := []string{"type", "method"}
-	// outputExample is optional per the real spec (only `input` is in the
-	// schema's own `required` list) -- added anyway because every live,
-	// genuinely-cataloged entry pulled from the real facilitator
-	// (facilitator.goplausible.xyz/discovery/resources) has one, so this
-	// closes the one structural gap left between our declaration and a
-	// real working example, even though it isn't a hard requirement.
-	var outputExample map[string]any
 	if target != "" {
-		input["queryParams"] = map[string]any{"target": target}
-		inputSchemaProps["queryParams"] = map[string]any{"type": "object"}
-		outputExample = map[string]any{"ok": true, "note": "the target endpoint's own paid response, forwarded unmodified"}
-	} else {
-		outputExample = map[string]any{"service": "AgentMesh x402 relay", "docs": true, "txId": "..."}
+		decl.QueryParams = map[string]any{"target": target}
+		decl.OutputExample = map[string]any{"ok": true, "note": "the target endpoint's own paid response, forwarded unmodified"}
 	}
-	return map[string]any{
-		"bazaar": map[string]any{
-			// routeTemplate (sibling of info/schema, same convention as
-			// GoPlausible's own Tendril reference implementation) tells the
-			// facilitator to canonicalize this resource as origin+routeTemplate
-			// instead of origin+actual-request-pathname. Every call this
-			// route ever handles -- self-listing or any ?target= value --
-			// is physically the same path, /x402/relay, so without this the
-			// facilitator has no reason to merge them and nothing changes
-			// today; this only starts mattering if a future route here ever
-			// grows a path param instead of a query param.
-			// MUST stay the public path (relayPublicPath), not this backend's
-			// own internal route. routeTemplate exists so the facilitator can
-			// canonicalize the resource as origin+routeTemplate instead of
-			// origin+request-pathname -- so a stale value here doesn't just
-			// mislabel, it names a URL that does not exist. Hardcoding
-			// "/x402/relay" while resource.url moved to the /api proxy
-			// produced exactly that: origin+routeTemplate resolved to
-			// https://www.agent-mesh.app/x402/relay, a confirmed 404, since
-			// Vercel only rewrites /api/*. Derived from the same constant as
-			// the URL itself so the two cannot drift again.
-			"routeTemplate": relayPublicPath,
-			"info": map[string]any{
-				"input":  input,
-				"output": map[string]any{"type": "json", "example": outputExample},
-			},
-			"schema": map[string]any{
-				"$schema": "https://json-schema.org/draft/2020-12/schema",
-				"type":    "object",
-				"properties": map[string]any{
-					"input": map[string]any{
-						"type":                 "object",
-						"properties":           inputSchemaProps,
-						"required":             required,
-						"additionalProperties": false,
-					},
-					"output": map[string]any{
-						"type": "object",
-						"properties": map[string]any{
-							"type":    map[string]any{"type": "string"},
-							"example": map[string]any{"type": "object"},
-						},
-						"required": []string{"type"},
-					},
-				},
-				"required": []string{"input"},
-			},
-		},
-	}
+	return nodes.BazaarDiscoveryExtension(decl)
 }
 
 // relayInboundChallenge fetches the target's real 402 price and mirrors it
 // back as our own v2 challenge, tagged for the challenge and paid to our
 // platform wallet instead of the target's.
-func (d *Deps) relayInboundChallenge(w http.ResponseWriter, r *http.Request, target, targetMethod string, targetBody []byte, targetContentType string) {
-	quote, err := fetchTargetPriceQuote(r.Context(), target, targetMethod, targetBody, targetContentType)
+func (d *Deps) relayInboundChallenge(w http.ResponseWriter, r *http.Request, target, targetMethod string, targetBody []byte, targetContentType, targetAuth string) {
+	quote, err := fetchTargetPriceQuote(r.Context(), target, targetMethod, targetBody, targetContentType, targetAuth)
 	if err != nil {
 		respond.Error(w, http.StatusBadGateway, "target fetch failed: "+err.Error())
 		return
@@ -697,7 +680,7 @@ func (d *Deps) relayInboundChallenge(w http.ResponseWriter, r *http.Request, tar
 // pays the real target from the platform wallet, then relays the target's
 // paid response back. Both settlements are real, GoPlausible-facilitated,
 // mainnet payments — this is what earns orchestrator-entry attribution.
-func (d *Deps) relaySettleAndForward(w http.ResponseWriter, r *http.Request, target, xPaymentHeader, targetMethod string, targetBody []byte, targetContentType string) {
+func (d *Deps) relaySettleAndForward(w http.ResponseWriter, r *http.Request, target, xPaymentHeader, targetMethod string, targetBody []byte, targetContentType, targetAuth string) {
 	ctx := r.Context()
 
 	var payload x402.PaymentPayload
@@ -711,7 +694,7 @@ func (d *Deps) relaySettleAndForward(w http.ResponseWriter, r *http.Request, tar
 	// facilitator actually enforces the quoted price instead of trusting
 	// whatever the caller's payment payload claims) and what lets us record
 	// the real settled amount in the ledger instead of a hardcoded 0.
-	quote, err := fetchTargetPriceQuote(ctx, target, targetMethod, targetBody, targetContentType)
+	quote, err := fetchTargetPriceQuote(ctx, target, targetMethod, targetBody, targetContentType, targetAuth)
 	if err != nil {
 		respond.Error(w, http.StatusBadGateway, "target fetch failed: "+err.Error())
 		return
@@ -821,7 +804,7 @@ func (d *Deps) relaySettleAndForward(w http.ResponseWriter, r *http.Request, tar
 		return
 	}
 
-	d.payTargetAndRespond(w, r, target, ledgerRow.ID, settleResult.TxID, quote, targetMethod, targetBody, targetContentType)
+	d.payTargetAndRespond(w, r, target, ledgerRow.ID, settleResult.TxID, quote, targetMethod, targetBody, targetContentType, targetAuth)
 }
 
 // payTargetAndRespond pays the real target from the platform wallet via the
@@ -850,7 +833,7 @@ func (d *Deps) relaySettleAndForward(w http.ResponseWriter, r *http.Request, tar
 // current architecture (the relay pays the target directly rather than via
 // a second facilitator round-trip from our side), not an oversight, and not
 // something to paper over with a fabricated id.
-func (d *Deps) payTargetAndRespond(w http.ResponseWriter, r *http.Request, target, ledgerID, inboundTxID string, quote targetPriceQuote, targetMethod string, targetBody []byte, targetContentType string) {
+func (d *Deps) payTargetAndRespond(w http.ResponseWriter, r *http.Request, target, ledgerID, inboundTxID string, quote targetPriceQuote, targetMethod string, targetBody []byte, targetContentType, targetAuth string) {
 	ctx := r.Context()
 
 	cfg := nodes.Wallet2PayConfig{
@@ -860,6 +843,7 @@ func (d *Deps) payTargetAndRespond(w http.ResponseWriter, r *http.Request, targe
 		RelayNetwork:              d.RelayNetwork,
 		MaxRelayOutboundUSDMicros: d.MaxRelayOutboundUSDMicros,
 		ContentType:               targetContentType,
+		Authorization:             targetAuth,
 	}
 	result, err := nodes.PayTargetFromWallet2(ctx, cfg, target, targetMethod, targetBody, nodes.TargetQuote{
 		PayTo: quote.PayTo, Asset: quote.Asset, MaxAmountRequired: quote.MaxAmountRequired, FeePayer: quote.FeePayer,

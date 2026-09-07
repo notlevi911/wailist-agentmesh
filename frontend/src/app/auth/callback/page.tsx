@@ -13,10 +13,18 @@ export default function AuthCallbackPage() {
   }, [router]);
 
   return (
-    <div style={{
-      height: "100vh", display: "flex", alignItems: "center", justifyContent: "center",
-      background: "var(--bg)", color: "var(--fg-muted)", fontFamily: "var(--font-mono)", fontSize: 13,
-    }}>
+    <div
+      style={{
+        height: "100dvh",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        background: "var(--bg)",
+        color: "var(--fg-muted)",
+        fontFamily: "var(--font-mono)",
+        fontSize: 13,
+      }}
+    >
       Signing you in…
     </div>
   );

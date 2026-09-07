@@ -3,7 +3,9 @@ package wallet
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -15,6 +17,39 @@ import (
 	"github.com/algorand/go-algorand-sdk/v2/transaction"
 	"github.com/algorand/go-algorand-sdk/v2/types"
 )
+
+// uniqueNote appends 8 random bytes to tag so repeated x402 payments with
+// identical sender/receiver/amount/asset never produce byte-identical --
+// and therefore same-txid -- transactions when two such calls land within
+// the same algod round (SuggestedParams' FirstValid/LastValid only change
+// per round, not per call). This matters most for the platform's own flat
+// per-call markup (SettlePlatformFee/runfund.go), which pays the exact
+// same amount from the exact same wallet to the exact same wallet on
+// every single call: without a distinguishing note, two such settlements
+// landing in the same ~3s round hash identically, and algod rejects the
+// second as an exact duplicate ("transaction already in ledger") even
+// though nothing about the payment itself was invalid. Confirmed as the
+// dominant cause behind that leg's elevated verify-without-settle rate
+// (facilitator.goplausible.xyz: ~27.5% for the flat-amount platform fee
+// vs ~9.5% for the main relay leg, whose amount varies per vendor quote
+// and so rarely collides).
+//
+// Propagates rand.Read's error rather than falling back to a zeroed nonce
+// -- matching this codebase's existing randHex/randURLSafe/randomHex32
+// convention (oauth.go, connector_oauth.go, connectors_devtools.go). A
+// silently-swallowed CSPRNG failure would make every note the same
+// constant string during the outage, reintroducing the exact collision
+// this function exists to eliminate with no log line or metric to say so;
+// callers below fail the payment attempt instead, which is loud and
+// matches how a signing failure is already handled everywhere else in
+// this file.
+func uniqueNote(tag string) ([]byte, error) {
+	nonce := make([]byte, 8)
+	if _, err := rand.Read(nonce); err != nil {
+		return nil, fmt.Errorf("generate unique payment note: %w", err)
+	}
+	return []byte(tag + ":" + hex.EncodeToString(nonce)), nil
+}
 
 type Service struct {
 	encKey     string
@@ -117,7 +152,19 @@ func (s *Service) SignAndSendPayment(ctx context.Context, encMnemonic, toAddress
 	if err != nil {
 		return "", err
 	}
-	txn, err := transaction.MakePaymentTxn(acc.Address.String(), toAddress, microAlgo, nil, "", params)
+	// uniqueNote, not nil: this is the same "identical sender/receiver/amount
+	// within one algod round hashes identically" collision uniqueNote's own
+	// doc comment describes, on the legacy ALGO-direct-pay dialect
+	// (ExecuteTool402's older non-USDC-relay path) rather than the USDC
+	// group-signing path that comment was written for -- an agent calling
+	// the same tool402 endpoint twice in quick succession with an unchanged
+	// quoted price would otherwise produce byte-identical transactions and
+	// have the second rejected by algod as an exact duplicate.
+	note, err := uniqueNote("x402-legacy-pay")
+	if err != nil {
+		return "", err
+	}
+	txn, err := transaction.MakePaymentTxn(acc.Address.String(), toAddress, microAlgo, note, "", params)
 	if err != nil {
 		return "", err
 	}
@@ -194,13 +241,21 @@ func (s *Service) SignUSDCPaymentGroup(ctx context.Context, encMnemonic, payTo s
 		return nil, 0, err
 	}
 
-	payTxn, err := transaction.MakeAssetTransferTxn(acc.Address.String(), payTo, amountMicros, []byte("x402-payment-v2"), params, "", assetID)
+	payNote, err := uniqueNote("x402-payment-v2")
+	if err != nil {
+		return nil, 0, err
+	}
+	payTxn, err := transaction.MakeAssetTransferTxn(acc.Address.String(), payTo, amountMicros, payNote, params, "", assetID)
 	if err != nil {
 		return nil, 0, err
 	}
 	payTxn.Fee = 0 // fee-pooled: the stub below covers both txns' fees
 
-	feeStub, err := transaction.MakePaymentTxn(feePayerAddr, feePayerAddr, 0, []byte("x402-fee-payer"), "", params)
+	feeStubNote, err := uniqueNote("x402-fee-payer")
+	if err != nil {
+		return nil, 0, err
+	}
+	feeStub, err := transaction.MakePaymentTxn(feePayerAddr, feePayerAddr, 0, feeStubNote, "", params)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -263,7 +318,11 @@ func (s *Service) SignUSDCPaymentSingle(ctx context.Context, encMnemonic, payTo 
 		return nil, 0, err
 	}
 
-	payTxn, err := transaction.MakeAssetTransferTxn(acc.Address.String(), payTo, amountMicros, []byte("x402-payment-v2"), params, "", assetID)
+	payNote, err := uniqueNote("x402-payment-v2")
+	if err != nil {
+		return nil, 0, err
+	}
+	payTxn, err := transaction.MakeAssetTransferTxn(acc.Address.String(), payTo, amountMicros, payNote, params, "", assetID)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -278,4 +337,56 @@ func (s *Service) SignUSDCPaymentSingle(ctx context.Context, encMnemonic, payTo 
 	}
 
 	return []string{base64.StdEncoding.EncodeToString(signed)}, 0, nil
+}
+
+// SignZeroSelfPayment signs a 0-amount payment from an address to itself,
+// carrying note in the note field, using hardcoded suggested params rather
+// than any algod round trip.
+//
+// Tendril's /auth/wallet-login verifies this signature and then discards the
+// transaction — it is never broadcast. That is why the params below are
+// invented rather than fetched: a transaction nobody submits has no real
+// validity window to respect, and requiring algod here would make logging in
+// to read a balance fail whenever the node is slow. It also costs nothing and
+// requires no balance, which matters because Wallet 2's ALGO is not this
+// feature's concern.
+//
+// Returns the base64 signed transaction and the signing address.
+func (s *Service) SignZeroSelfPayment(ctx context.Context, encMnemonic, note, genesisHashB64, genesisID string) (string, string, error) {
+	mn, err := s.DecryptMnemonic(encMnemonic)
+	if err != nil {
+		return "", "", err
+	}
+	privateKey, err := mnemonic.ToPrivateKey(mn)
+	if err != nil {
+		return "", "", err
+	}
+	acct, err := crypto.AccountFromPrivateKey(privateKey)
+	if err != nil {
+		return "", "", err
+	}
+	addr := acct.Address.String()
+
+	genesisHash, err := base64.StdEncoding.DecodeString(genesisHashB64)
+	if err != nil {
+		return "", "", fmt.Errorf("genesis hash: %w", err)
+	}
+	params := types.SuggestedParams{
+		Fee:             1000,
+		MinFee:          1000,
+		FirstRoundValid: 1,
+		LastRoundValid:  1000,
+		GenesisID:       genesisID,
+		GenesisHash:     genesisHash,
+		FlatFee:         true,
+	}
+	txn, err := transaction.MakePaymentTxn(addr, addr, 0, []byte(note), "", params)
+	if err != nil {
+		return "", "", err
+	}
+	_, signed, err := crypto.SignTransaction(privateKey, txn)
+	if err != nil {
+		return "", "", err
+	}
+	return base64.StdEncoding.EncodeToString(signed), addr, nil
 }

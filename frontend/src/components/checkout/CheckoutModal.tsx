@@ -1,9 +1,10 @@
 "use client";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { IconClose } from "@/components/ui";
+import { useModalDismissal } from "@/hooks/useModalDismissal";
 import { useCredits } from "@/lib/credits/store";
-import type { Purchase } from "@/lib/credits/types";
+import { creditsForTopup } from "@/lib/credits/fx";
 import type { PaymentMethod } from "./types";
 import { DEFAULT_PROVIDER } from "./paymentProviders";
 import { buildCreditCart, computeTotals } from "./mockData";
@@ -70,46 +71,34 @@ export function CheckoutModal({
   const panelRef = useRef<HTMLDivElement>(null);
   const items = useMemo(() => buildCreditCart(amountINR), [amountINR]);
   const [method, setMethod] = useState<PaymentMethod>(DEFAULT_PROVIDER);
-  const { addPurchase, balanceUSD } = useCredits();
+  const { recordPurchase, balanceUSD } = useCredits();
   const router = useRouter();
-  const [confirmation, setConfirmation] = useState<Purchase | null>(null);
+  // Just the credited amount for the success screen, not a purchase record:
+  // credit_ledger is where the purchase lives, written by the backend when the
+  // payment was created and settled by the gateway's webhook. Keeping a local
+  // record here is what used to make history per-browser.
+  const [creditedUSD, setCreditedUSD] = useState<number | null>(null);
 
   const totals = useMemo(() => computeTotals(items), [items]);
 
   const handlePaid = (creditsUSDOverride?: number) => {
-    setConfirmation(
-      addPurchase({ amountINR: totals.total, method, creditsUSDOverride }),
-    );
+    // creditsUSDOverride is the backend-verified credited amount. A provider
+    // that cannot report one yet (the NOWPayments stub) falls back to the FX
+    // estimate for this screen only -- the balance shown underneath comes from
+    // the server either way, so an estimate here can never become a number the
+    // user is billed against.
+    setCreditedUSD(creditsUSDOverride ?? creditsForTopup(totals.total));
+    void recordPurchase();
   };
 
-  // Close on Escape key
-  useEffect(() => {
-    if (!open) return;
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
-    };
-    document.addEventListener("keydown", onKey);
-    return () => document.removeEventListener("keydown", onKey);
-  }, [open, onClose]);
-
-  // Lock body scroll while open
-  useEffect(() => {
-    if (open) {
-      document.body.style.overflow = "hidden";
-    } else {
-      document.body.style.overflow = "";
-    }
-    return () => {
-      document.body.style.overflow = "";
-    };
-  }, [open]);
+  useModalDismissal(onClose, open);
 
   if (!open) return null;
 
   return (
     <>
       <style>{MODAL_CSS}</style>
-      {/* Backdrop — click outside the panel to close */}
+      {/* Backdrop -- click outside the panel to close */}
       <div
         className="checkout-backdrop"
         role="presentation"
@@ -127,7 +116,7 @@ export function CheckoutModal({
           <div
             style={{ flex: 1, minHeight: 0, overflowY: "auto", padding: 24 }}
           >
-            {confirmation ? (
+            {creditedUSD !== null ? (
               <div
                 style={{
                   display: "flex",
@@ -168,7 +157,7 @@ export function CheckoutModal({
                 <p
                   style={{ fontSize: 13, color: "var(--fg-muted)", margin: 0 }}
                 >
-                  ${confirmation.creditsUSD.toFixed(2)} credits added to your
+                  ${creditedUSD.toFixed(2)} credits added to your
                   wallet.
                 </p>
                 <div

@@ -25,7 +25,7 @@ export function Donut({
   const r = (size - thickness) / 2;
   const c = 2 * Math.PI * r;
   const cx = size / 2;
-  // Cumulative start fraction per segment, precomputed — mutating a shared
+  // Cumulative start fraction per segment, precomputed -- mutating a shared
   // accumulator from inside the map callback reassigns render-scope state.
   const starts: number[] = [];
   for (let a = 0, i = 0; i < segments.length; i++) {

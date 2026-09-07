@@ -6,7 +6,7 @@
 // The payment providers AgentMesh settles credit top-ups through. Cashfree and
 // NOWPayments are live; PayPal and Stripe are planned (rendered but disabled in
 // the checkout). Buying digital credits online, there is deliberately no
-// cash-on-delivery / card-form option — the provider hosts its own payment UI.
+// cash-on-delivery / card-form option -- the provider hosts its own payment UI.
 export type PaymentMethod = "cashfree" | "nowpayments" | "paypal" | "stripe";
 
 export interface CartItem {

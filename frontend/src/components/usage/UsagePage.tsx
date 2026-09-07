@@ -5,8 +5,7 @@ import { useCredits } from "@/lib/credits/store";
 import { LowBalanceBanner } from "@/components/billing/LowBalanceBanner";
 import { IconSearch, Card, ghostBtnSm } from "@/components/ui";
 import { Topbar } from "@/components/Topbar";
-import { usage as usageApi, auth as authApi } from "@/lib/api";
-import { listSettlements } from "@/lib/settlements";
+import { usage as usageApi } from "@/lib/api";
 import {
   UsageRange,
   UsagePayload,
@@ -56,7 +55,7 @@ export function UsagePage() {
     if (wf) setScopedWf(wf);
   }, []);
 
-  // The fetch effect only fetches — loading/error resets live in the event
+  // The fetch effect only fetches -- loading/error resets live in the event
   // handlers (changeRange/retry) that trigger it, and the initial state
   // already starts as loading. Sync setState in effects cascades renders.
   useEffect(() => {
@@ -74,7 +73,7 @@ export function UsagePage() {
       })
       .catch((e) => {
         if (cancelled) return;
-        // Surface the failure but keep the last good payload — a transient error
+        // Surface the failure but keep the last good payload -- a transient error
         // on a range switch shouldn't blank a page that was already working.
         console.error("usage load failed", e);
         setLoadError(e instanceof Error ? e : new Error(String(e)));
@@ -114,8 +113,9 @@ export function UsagePage() {
 
   return (
     <div
+      className="am-viewport"
       style={{
-        height: "100vh",
+        height: "100dvh",
         display: "flex",
         flexDirection: "column",
         overflow: "hidden",
@@ -130,7 +130,7 @@ export function UsagePage() {
           style={{
             maxWidth: 1280,
             margin: "0 auto",
-            padding: "36px 24px 80px",
+            padding: "var(--wf-page-pad)",
           }}
         >
           {scopedWf && (
@@ -184,7 +184,7 @@ export function UsagePage() {
                 color: "var(--danger)",
               }}
             >
-              couldn&apos;t refresh — showing the last loaded data
+              couldn&apos;t refresh, showing the last loaded data
               <button
                 onClick={retry}
                 style={{
@@ -230,7 +230,7 @@ export function UsagePage() {
                 couldn&apos;t load usage
               </div>
               <div style={{ color: "var(--fg-dim)", marginBottom: 16 }}>
-                the usage service didn&apos;t respond — this is different from
+                the usage service didn&apos;t respond; this is different from
                 having no usage yet
               </div>
               <button onClick={retry} style={ghostBtnSm}>
@@ -249,7 +249,7 @@ export function UsagePage() {
                 fontSize: 12,
               }}
             >
-              no usage yet — run a workflow to see spend here
+              no usage yet, run a workflow to see spend here
             </div>
           ) : (
             <UsageBody
@@ -287,22 +287,26 @@ function UsageBody({
 }) {
   const { timeseries, byWorkflow, byEndpoint } = data;
   const { balanceUSD, refreshBalance } = useCredits();
-  const [localSettlements, setLocalSettlements] = useState<Settlement[]>([]);
-  // Settlements come from the local per-user record rather than the API: the
-  // server has no way to scope x402_relay_settlements to a user yet (no
-  // user_id column), so /usage/settlements deliberately returns nothing.
-  const settlements = localSettlements;
-  // Read after mount and only for the signed-in user, so another account's
-  // history in the same browser is never shown.
+  // One server-scoped source. /usage/settlements merges the user's own
+  // workflow-run x402 payments (read back from the run_logs receipts the
+  // engine persists per settlement) with their Tendril top-ups, both already
+  // scoped to the signed-in user and already sorted newest-first — see
+  // usage.go's UsageSettlements doc comment.
+  //
+  // The x402 half used to be rebuilt client-side into localStorage, which
+  // followed the browser rather than the account: the rows vanished on
+  // sign-out and did not follow the user to another device, even though the
+  // receipts were in the database the whole time.
+  const [settlements, setSettlements] = useState<Settlement[]>([]);
   useEffect(() => {
     let stale = false;
-    authApi
-      .me()
-      .then((u) => {
-        if (!stale) setLocalSettlements(listSettlements(u.id));
+    usageApi
+      .settlements(18)
+      .then((rows) => {
+        if (!stale) setSettlements(rows);
       })
       .catch(() => {
-        /* signed out: leave the panel empty */
+        /* transient failure: leave whatever loaded last */
       });
     return () => {
       stale = true;
@@ -339,7 +343,7 @@ function UsageBody({
     <div style={{ opacity: loading ? 0.6 : 1, transition: "opacity .15s" }}>
       <LowBalanceBanner onTopUp={onTopUp} />
       {/* Header row above the Endpoints table: credits left (left) mirrors the range selector (right).
-          Keep the empty headspace above it — content starts low on the page. */}
+          Keep the empty headspace above it -- content starts low on the page. */}
       <div
         className="reveal reveal-delay-1"
         style={{
@@ -504,14 +508,14 @@ function UsageBody({
         </div>
       </div>
 
-      {/* ④ Endpoints table — first */}
+      {/* ④ Endpoints table -- first */}
       <EndpointTable
         rows={byEndpoint}
         className="reveal reveal-delay-1"
         style={{ marginBottom: 16 }}
       />
 
-      {/* ② Usage + Spend merged — two distinct-coloured lines, combined tooltip */}
+      {/* ② Usage + Spend merged -- two distinct-coloured lines, combined tooltip */}
       <Card className="reveal reveal-delay-2" style={{ marginBottom: 16 }}>
         <CardHead
           title="Usage & Spend over time"
@@ -673,7 +677,7 @@ function UsageBody({
         </Card>
       </div>
 
-      {/* ⑤ Recent settlements — on-chain, kept in ALGO */}
+      {/* ⑤ Recent settlements -- on-chain, kept in ALGO */}
       <Card style={{ marginBottom: 16 }}>
         <CardHead
           title="Recent settlements"
@@ -689,85 +693,88 @@ function UsageBody({
             </span>
           }
         />
-        <div
-          style={{
-            display: "grid",
-            gridTemplateColumns: SETTLE_GRID,
-            gap: 14,
-            padding: "8px 10px",
-            background: "var(--bg-elev-2)",
-            borderRadius: "var(--r-2)",
-            marginTop: 4,
-            alignItems: "center",
-          }}
-        >
-          <span style={hcell}>Endpoint</span>
-          <span style={hcell}>Hash</span>
-          <span style={hcell}>Workflow</span>
-          <span style={{ ...hcell, textAlign: "right" }}>Amount</span>
-          <span style={{ ...hcell, textAlign: "right" }}>Time</span>
-        </div>
-        <div style={{ padding: "2px 0" }}>
-          {settlements.map((s, i) => (
-            <div
-              key={s.txId}
-              style={{
-                display: "grid",
-                gridTemplateColumns: SETTLE_GRID,
-                gap: 14,
-                alignItems: "center",
-                padding: "11px 10px",
-                borderBottom:
-                  i < settlements.length - 1
-                    ? "1px solid var(--border-soft)"
-                    : "none",
-                fontFamily: "var(--font-mono)",
-                fontSize: 11,
-              }}
-            >
-              <span
+        <div className="am-usage-table">
+          <div
+            style={{
+              minWidth: 720,
+              display: "grid",
+              gridTemplateColumns: SETTLE_GRID,
+              gap: 14,
+              padding: "8px 10px",
+              background: "var(--bg-elev-2)",
+              borderRadius: "var(--r-2)",
+              marginTop: 4,
+              alignItems: "center",
+            }}
+          >
+            <span style={hcell}>Endpoint</span>
+            <span style={hcell}>Hash</span>
+            <span style={hcell}>Workflow</span>
+            <span style={{ ...hcell, textAlign: "right" }}>Amount</span>
+            <span style={{ ...hcell, textAlign: "right" }}>Time</span>
+          </div>
+          <div style={{ minWidth: 720, padding: "2px 0" }}>
+            {settlements.map((s, i) => (
+              <div
+                key={s.txId}
                 style={{
-                  color: "var(--fg-muted)",
-                  overflow: "hidden",
-                  textOverflow: "ellipsis",
-                  whiteSpace: "nowrap",
+                  display: "grid",
+                  gridTemplateColumns: SETTLE_GRID,
+                  gap: 14,
+                  alignItems: "center",
+                  padding: "11px 10px",
+                  borderBottom:
+                    i < settlements.length - 1
+                      ? "1px solid var(--border-soft)"
+                      : "none",
+                  fontFamily: "var(--font-mono)",
+                  fontSize: 11,
                 }}
               >
-                {s.endpoint}
-              </span>
-              <a
-                href={s.explorerURL}
-                target="_blank"
-                rel="noopener noreferrer"
-                style={{
-                  color: "#E879F9",
-                  textDecoration: "underline",
-                  whiteSpace: "nowrap",
-                  overflow: "hidden",
-                  textOverflow: "ellipsis",
-                }}
-              >
-                {s.txId.slice(0, 13)}…
-              </a>
-              <span
-                style={{
-                  color: "var(--fg-dim)",
-                  overflow: "hidden",
-                  textOverflow: "ellipsis",
-                  whiteSpace: "nowrap",
-                }}
-              >
-                {s.workflowId}
-              </span>
-              <span style={{ color: "var(--fg)", textAlign: "right" }}>
-                {s.amountAlgo.toFixed(6)}{" "}
-                <span style={{ color: "var(--fg-dim)" }}>ALGO</span>
-              </span>
-              <span style={{ color: "var(--fg-dim)", textAlign: "right" }}>
-                {relTime(s.ts)}
-              </span>
-            </div>
-          ))}
+                <span
+                  style={{
+                    color: "var(--fg-muted)",
+                    overflow: "hidden",
+                    textOverflow: "ellipsis",
+                    whiteSpace: "nowrap",
+                  }}
+                >
+                  {s.endpoint}
+                </span>
+                <a
+                  href={s.explorerURL}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  style={{
+                    color: "#E879F9",
+                    textDecoration: "underline",
+                    whiteSpace: "nowrap",
+                    overflow: "hidden",
+                    textOverflow: "ellipsis",
+                  }}
+                >
+                  {s.txId.slice(0, 13)}…
+                </a>
+                <span
+                  style={{
+                    color: "var(--fg-dim)",
+                    overflow: "hidden",
+                    textOverflow: "ellipsis",
+                    whiteSpace: "nowrap",
+                  }}
+                >
+                  {s.workflowId || "—"}
+                </span>
+                <span style={{ color: "var(--fg)", textAlign: "right" }}>
+                  {s.amountAlgo.toFixed(6)}{" "}
+                  <span style={{ color: "var(--fg-dim)" }}>ALGO</span>
+                </span>
+                <span style={{ color: "var(--fg-dim)", textAlign: "right" }}>
+                  {relTime(s.ts)}
+                </span>
+              </div>
+            ))}
+          </div>
         </div>
       </Card>
 
@@ -789,7 +796,7 @@ function UsageBody({
 }
 
 // ── Endpoints table ─────────────────────────────────────────────────────────
-// "type" sorts by the rank below, not alphabetically — a-l-x (action, llm,
+// "type" sorts by the rank below, not alphabetically -- a-l-x (action, llm,
 // x402) reads as noise. x402 first matches the filter pills and the spend
 // order the rest of the page is built around.
 type SortKey =
@@ -843,7 +850,7 @@ function EndpointTable({
       const av = a[sort.key],
         bv = b[sort.key];
       let cmp: number;
-      // Type only has 3 values, so it leaves big ties — order those by spend
+      // Type only has 3 values, so it leaves big ties -- order those by spend
       // (desc) rather than leaving each group in arbitrary fixture order.
       if (sort.key === "type")
         cmp =
@@ -932,8 +939,8 @@ function EndpointTable({
               height: 32,
               paddingLeft: 30,
               paddingRight: 12,
-              width: 240,
-              maxWidth: "100%",
+              width: "100%",
+              maxWidth: 240,
               background: "var(--bg-elev-2)",
               border: "1px solid var(--border)",
               borderRadius: "var(--r-2)",
@@ -1040,11 +1047,11 @@ function EndpointTable({
                 </span>
                 <TypeTag type={r.type} />
                 <span style={numCell}>{r.calls.toLocaleString()}</span>
-                {/* Both money columns are USD like every other figure on the page —
+                {/* Both money columns are USD like every other figure on the page --
                   a bare "6.110" reads as dollars but is ALGO (~6× off). The exact
                   on-chain ALGO amount stays available on hover for anyone
                   cross-checking settlements. LLM unit prices are estimates
-                  (see footer) — the * marks the price, not the total. */}
+                  (see footer) -- the * marks the price, not the total. */}
                 <span
                   className={r.unitPrice != null ? "cell-tip" : undefined}
                   data-tip={
@@ -1065,7 +1072,7 @@ function EndpointTable({
                       <span style={{ color: "var(--fg-dim)" }}>/{r.unit}</span>
                     </>
                   ) : (
-                    "—"
+                    "-"
                   )}
                 </span>
                 <span
@@ -1103,7 +1110,7 @@ function EndpointTable({
                       }}
                     />
                   </span>
-                  {/* Fixed-width value box so the bars line up in a column — with the
+                  {/* Fixed-width value box so the bars line up in a column -- with the
                     text free-width, wider values pushed each row's bar to a different x. */}
                   <span style={{ minWidth: 40, textAlign: "right" }}>
                     {r.pctOfSpend}%
@@ -1122,7 +1129,7 @@ function EndpointTable({
                             : "var(--fg-muted)",
                   }}
                 >
-                  {r.successRate == null ? "—" : `${r.successRate}%`}
+                  {r.successRate == null ? "-" : `${r.successRate}%`}
                 </span>
                 <span style={{ ...numCell, color: "var(--fg-muted)" }}>
                   {relTime(r.lastUsedAt)}
@@ -1136,7 +1143,7 @@ function EndpointTable({
   );
 }
 
-// Sortable column header — declared at module scope (not inside EndpointTable's
+// Sortable column header -- declared at module scope (not inside EndpointTable's
 // render) so it isn't recreated every render. Sort state + toggle come via props.
 function Th({
   k,
@@ -1319,7 +1326,7 @@ function usd(algoAmount: number, dp = 2) {
     maximumFractionDigits: dp,
   });
 }
-// Compact USD for the credit balance — keeps large figures small (100K, 50, 2.3M).
+// Compact USD for the credit balance -- keeps large figures small (100K, 50, 2.3M).
 function compactUsd(algoAmount: number) {
   return Intl.NumberFormat("en", {
     notation: "compact",

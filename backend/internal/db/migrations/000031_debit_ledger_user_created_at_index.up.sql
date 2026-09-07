@@ -1,0 +1,16 @@
+-- attachWorkflowStats (store.go) runs on every ListWorkflows call:
+--   SELECT workflow_id, COALESCE(SUM(amount_usd_micros), 0)
+--   FROM debit_ledger WHERE user_id = $1 AND created_at >= $2
+--   GROUP BY workflow_id
+-- The only existing index on this table, idx_debit_ledger_user, covers
+-- user_id alone -- Postgres still walks every ledger row a user has ever
+-- accrued, since debit_ledger grows without bound as billable nodes run,
+-- then filters created_at post-lookup. This composite index lets it range
+-- straight to the trailing workflowStatsWindow instead.
+-- CONCURRENTLY: debit_ledger is written on every billable node execution
+-- (CommitReservedDebit et al) and migrations run automatically on backend
+-- startup against a live database, same reasoning as
+-- 000022_runs_workflow_started_at_index. See that migration's comment for
+-- the IF NOT EXISTS / INVALID-index caveat and recovery steps; they apply
+-- here unchanged.
+CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_debit_ledger_user_created_at ON debit_ledger (user_id, created_at DESC);

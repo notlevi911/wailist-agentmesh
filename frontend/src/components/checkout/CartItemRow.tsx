@@ -2,8 +2,8 @@
 import type { CartItem } from "./types";
 import { IconWallet } from "@/components/ui";
 
-// A single, read-only credit line. A top-up is one indivisible amount — there is
-// no quantity to change or item to remove — so this just presents the bundle and
+// A single, read-only credit line. A top-up is one indivisible amount -- there is
+// no quantity to change or item to remove -- so this just presents the bundle and
 // its price. Styling comes entirely from the app's dark design tokens.
 export function CartItemRow({ item }: { item: CartItem }) {
   const lineTotal = item.unitPrice * item.quantity;

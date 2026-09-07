@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { clampWidth, PALETTE, INSPECTOR, MIN_CANVAS } from "./panelSizing";
 
-const WIDE = 1600; // plenty of room — container constraint never binds
+const WIDE = 1600; // plenty of room -- container constraint never binds
 
 describe("clampWidth", () => {
   it("clamps below the minimum up to min", () => {
@@ -11,6 +11,14 @@ describe("clampWidth", () => {
   it("clamps above the maximum down to max", () => {
     expect(clampWidth(9999, PALETTE, WIDE, INSPECTOR.default)).toBe(
       PALETTE.max,
+    );
+  });
+
+  // Pins the rail's upper bound: it is a terminal column budget now, not just
+  // a layout preference (see the comment on INSPECTOR).
+  it("clamps the inspector above its maximum down to max", () => {
+    expect(clampWidth(9999, INSPECTOR, WIDE, PALETTE.default)).toBe(
+      INSPECTOR.max,
     );
   });
 

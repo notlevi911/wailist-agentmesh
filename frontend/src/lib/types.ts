@@ -1,5 +1,14 @@
 export type NodeType =
-  "trigger" | "agent" | "provider" | "tool" | "tool402" | "action" | "end";
+  | "trigger"
+  | "agent"
+  | "provider"
+  | "tool"
+  | "tool402"
+  | "action"
+  | "state"
+  | "end"
+  | "tendril"
+  | "google";
 export type EdgeKind = "flow" | "attach";
 export type PortName = "in" | "out" | "model" | "tools" | "top";
 
@@ -63,6 +72,13 @@ export interface WorkflowNode {
   // nested body, and real endpoints want one.
   bodyMode?: "params" | "json";
   bodyTemplate?: string;
+  // state-specific — reads and writes the workflow's persisted variables,
+  // which survive between runs. stateValue is the literal to store for
+  // "set" (itself subject to {{state.x}} expansion) or the numeric delta
+  // for "increment".
+  stateOp?: "get" | "set" | "increment" | "delete";
+  stateKey?: string;
+  stateValue?: string;
   // trigger-specific
   source?: string;
   // email action-specific
@@ -72,10 +88,16 @@ export interface WorkflowNode {
   emailBody?: string;
   emailApiKey?: string;
   emailProvider?: string;
-  // generic per-connector storage — credentials go in secrets (encrypted server-side,
+  // generic per-connector storage -- credentials go in secrets (encrypted server-side,
   // "__enc__" sentinel on read), non-secret settings go in config
   secrets?: Record<string, string>;
   config?: Record<string, string>;
+  // tendril-specific
+  tendrilAction?: "topup" | "rent" | "run" | "release";
+  tendrilNodeId?: string;
+  tendrilHours?: string;
+  // USD of AgentMesh credit to convert into Tendril credit, on a topup node.
+  tendrilAmount?: string;
 }
 
 export interface WorkflowEdge {
@@ -100,6 +122,8 @@ export interface Workflow {
   runs?: number;
   spend?: string;
   tags?: string[];
+  scheduleCron?: string;
+  scheduleNextRunAt?: string;
 }
 
 export interface NodeTypeMeta {

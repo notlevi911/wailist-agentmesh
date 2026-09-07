@@ -151,3 +151,102 @@ func (s *Store) UsageByEndpoint(ctx context.Context, userID string, since time.T
 	}
 	return out, rows.Err()
 }
+
+// SettlementRow is one on-chain x402 payment a user's own run produced, read
+// back from the run_logs receipt the engine persisted at the moment it
+// settled.
+type SettlementRow struct {
+	Ts          time.Time
+	WorkflowID  string
+	Endpoint    string
+	USDMicros   int64
+	TxID        string
+	ExplorerURL string
+}
+
+// ListSettlements returns the x402 settlements belonging to a user's runs,
+// newest first.
+//
+// Source is run_logs, not x402_relay_settlements: the relay table records
+// every payment the public relay ever brokered and has no user_id (the relay
+// route is unauthenticated, so at insert time there is no user to attribute
+// to). The receipts a user's OWN runs produced are a different, answerable
+// question — runner.go writes one run_logs row per settlement precisely so a
+// dropped SSE stream cannot lose the on-chain record, and run_logs reaches a
+// user through runs -> workflows.
+//
+// This replaces a localStorage copy the usage page kept, which was per-browser
+// and therefore vanished on sign-out or a device change while the underlying
+// receipts sat in the database the whole time.
+//
+// Amount matches the frontend's old settledUsdOf(): the settled amount plus
+// the platform markup, since a v2 call's real total is the sum of both (see
+// nodes.paymentReceipt).
+//
+// Rows are de-duplicated by tx id, which is not optional. A run-funded agent
+// settles ONE real inbound payment up front and every tool call it then makes
+// reports that same tx id with only its own slice of the amount — stated at
+// nodes/tool402.go's "The same id repeats across every call in the run by
+// design ... so consumers that key on tx id must de-duplicate". Listing them
+// all shows a run's spend at roughly double what moved on-chain (a $0.50
+// pre-fund plus four per-call receipts reads as $1.05).
+//
+// Two details the naive dedup gets wrong:
+//
+//   - The winner of a tx id group must be the run-funding row, which carries
+//     the full amount that actually moved rather than one call's slice. It is
+//     identified by isFundingReceipt (runner.go sets it for exactly this) and
+//     not by ordering alone, since the funding row and the per-call receipts
+//     it covers are written in one loop and can share a timestamp.
+//   - A settlement that returned no tx id is still a real debit and has
+//     nothing to dedupe against. Collapsing those together (every "" being
+//     equal) dropped all but one and under-reported real spend, so each falls
+//     back to its own row id and survives on its own.
+func (s *Store) ListSettlements(ctx context.Context, userID string, limit int) ([]SettlementRow, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT ts, workflow_id, endpoint, usd_micros, tx_id, explorer_url FROM (
+			SELECT DISTINCT ON (
+			         CASE WHEN COALESCE(l.output->>'txId', '') = ''
+			              THEN l.id ELSE l.output->>'txId' END)
+			       l.ts,
+			       r.workflow_id,
+			       COALESCE(NULLIF(l.output->>'nodeName', ''), 'x402 endpoint') AS endpoint,
+			       COALESCE((l.output->>'settledUsdMicros')::bigint, 0)
+			         + COALESCE((l.output->>'platformFeeUsdMicros')::bigint, 0) AS usd_micros,
+			       COALESCE(l.output->>'txId', '') AS tx_id,
+			       COALESCE(l.output->>'explorerURL', '') AS explorer_url
+			FROM run_logs l
+			JOIN runs r ON r.id = l.run_id
+			JOIN workflows w ON w.id = r.workflow_id
+			WHERE w.user_id = $1
+			  -- Not the "?" existence operator: pgx also treats "?" as a
+			  -- placeholder in some query modes, and this backend runs the
+			  -- simple protocol behind PgBouncer. ->> IS NOT NULL asks the
+			  -- same question with no operator mistakable for a bind marker.
+			  AND l.output->>'settledUsdMicros' IS NOT NULL
+			-- DISTINCT ON requires its expression to lead ORDER BY; the rest
+			-- picks the winner within each tx id group (funding row first).
+			ORDER BY CASE WHEN COALESCE(l.output->>'txId', '') = ''
+			              THEN l.id ELSE l.output->>'txId' END,
+			         (l.output->>'isFundingReceipt') IS NOT NULL DESC,
+			         l.ts ASC, l.id ASC
+		) s
+		ORDER BY s.ts DESC, s.usd_micros DESC
+		LIMIT $2
+	`, userID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	// Non-nil so a user with no settlements marshals as [] rather than null.
+	out := make([]SettlementRow, 0, limit)
+	for rows.Next() {
+		var r SettlementRow
+		if err := rows.Scan(&r.Ts, &r.WorkflowID, &r.Endpoint, &r.USDMicros, &r.TxID, &r.ExplorerURL); err != nil {
+			return nil, err
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}

@@ -2,7 +2,7 @@
 import type { OrderTotals } from "./types";
 import { bonusUSD, creditsForTopup, gstBreakdown } from "@/lib/credits/fx";
 
-// Money summary for the credits checkout — a totals block. Coupons are
+// Money summary for the credits checkout -- a totals block. Coupons are
 // intentionally omitted (not offered yet) and there is no shipping, since
 // credits are digital: you pay the subtotal. The credits you receive are
 // highlighted as the reward of the purchase.
@@ -49,7 +49,7 @@ export function OrderSummary({ totals }: { totals: OrderTotals }) {
         </span>
       </div>
 
-      {/* Reward — the credits this purchase grants. */}
+      {/* Reward -- the credits this purchase grants. */}
       <div
         style={{
           display: "flex",

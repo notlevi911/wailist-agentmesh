@@ -10,6 +10,9 @@ const eslintConfig = defineConfig([
     // Default ignores of eslint-config-next:
     ".next/**",
     "out/**",
+    // The native shell's static export (next.config.ts, MOBILE_BUILD) --
+    // build output, same as out/ and .next/.
+    "out-mobile/**",
     "build/**",
     "next-env.d.ts",
   ]),

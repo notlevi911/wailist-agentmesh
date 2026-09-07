@@ -49,6 +49,30 @@ func TestHubSpotAction_CreatesNote(t *testing.T) {
 	}
 }
 
+func TestHubSpotAction_PrefersOAuthTokenOverManualToken(t *testing.T) {
+	var gotAuth string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotAuth = r.Header.Get("Authorization")
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+	nodes.SetHubSpotAPIBaseForTest(srv.URL)
+	defer nodes.SetHubSpotAPIBaseForTest("")
+
+	node := models.WorkflowNode{
+		ID: "hs4", Type: models.NodeTypeAction, Template: "hubspot",
+		Secrets: map[string]string{"hubspotAPIKey": "pat-na1-xxx", "hubspotOAuthAccessToken": "oauth-derived-token"},
+	}
+	rc := engine.NewRunContext("r1", []byte(`"follow up with lead"`))
+	_, err := nodes.ExecuteAction(context.Background(), node, rc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotAuth != "Bearer oauth-derived-token" {
+		t.Errorf("want OAuth token in Authorization header, got %q", gotAuth)
+	}
+}
+
 func TestHubSpotAction_SkipsWhenNoAPIKey(t *testing.T) {
 	node := models.WorkflowNode{
 		ID: "hs2", Type: models.NodeTypeAction, Template: "hubspot",
@@ -202,6 +226,104 @@ func TestMailchimpAction_SkipsWhenNoEmail(t *testing.T) {
 	}
 	if result != "mailchimp_skipped_no_email" {
 		t.Errorf("want 'mailchimp_skipped_no_email', got %v", result)
+	}
+}
+
+func TestMailchimpAction_OAuthTokenUsesStoredDCAndBearerAuth(t *testing.T) {
+	var gotPath, gotAuth string
+	var gotBody map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		gotAuth = r.Header.Get("Authorization")
+		json.NewDecoder(r.Body).Decode(&gotBody)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+	nodes.SetMailchimpAPIBaseForTest(srv.URL)
+	defer nodes.SetMailchimpAPIBaseForTest("")
+
+	node := models.WorkflowNode{
+		ID: "mc5", Type: models.NodeTypeAction, Template: "mailchimp",
+		Secrets: map[string]string{"mailchimpOAuthAccessToken": "oauth-derived-token", "mailchimpAPIKey": "manual-key-should-be-ignored"},
+		Config: map[string]string{
+			"mailchimpListID": "list42", "mailchimpEmail": "new.user@example.com", "mailchimpOAuthDC": "us21",
+		},
+	}
+	rc := engine.NewRunContext("r1", []byte(`"signup"`))
+	result, err := nodes.ExecuteAction(context.Background(), node, rc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result != "mailchimp_subscriber_added" {
+		t.Errorf("want 'mailchimp_subscriber_added', got %v", result)
+	}
+	wantHash := md5.Sum([]byte("new.user@example.com"))
+	wantPath := "/3.0/lists/list42/members/" + hex.EncodeToString(wantHash[:])
+	if gotPath != wantPath {
+		t.Errorf("want subscriber-hash path %q, got %q", wantPath, gotPath)
+	}
+	if gotAuth != "Bearer oauth-derived-token" {
+		t.Errorf("want bearer auth with OAuth token, got %q", gotAuth)
+	}
+	if gotBody["email_address"] != "new.user@example.com" {
+		t.Errorf("want email in body, got %v", gotBody)
+	}
+}
+
+func TestMailchimpAction_OAuthTokenSkipsWhenNoDC(t *testing.T) {
+	requestReceived := false
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requestReceived = true
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+	nodes.SetMailchimpAPIBaseForTest(srv.URL)
+	defer nodes.SetMailchimpAPIBaseForTest("")
+
+	node := models.WorkflowNode{
+		ID: "mc6", Type: models.NodeTypeAction, Template: "mailchimp",
+		Secrets: map[string]string{"mailchimpOAuthAccessToken": "oauth-derived-token"},
+		Config:  map[string]string{"mailchimpListID": "list42", "mailchimpEmail": "new.user@example.com"},
+	}
+	rc := engine.NewRunContext("r1", []byte(`"signup"`))
+	result, err := nodes.ExecuteAction(context.Background(), node, rc)
+	if !errors.Is(err, nodes.ErrActionSkipped) {
+		t.Fatalf("want ErrActionSkipped, got %v", err)
+	}
+	if result != "mailchimp_skipped_missing_config" {
+		t.Errorf("want 'mailchimp_skipped_missing_config', got %v", result)
+	}
+	if requestReceived {
+		t.Error("want no HTTP request when dc is missing")
+	}
+}
+
+func TestMailchimpAction_ManualAPIKeyPathUnchangedWhenNoOAuthToken(t *testing.T) {
+	var gotAuth string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotAuth = r.Header.Get("Authorization")
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+	nodes.SetMailchimpAPIBaseForTest(srv.URL)
+	defer nodes.SetMailchimpAPIBaseForTest("")
+
+	node := models.WorkflowNode{
+		ID: "mc7", Type: models.NodeTypeAction, Template: "mailchimp",
+		Secrets: map[string]string{"mailchimpAPIKey": "abc123-us21"},
+		Config:  map[string]string{"mailchimpListID": "list42", "mailchimpEmail": "new.user@example.com"},
+	}
+	rc := engine.NewRunContext("r1", []byte(`"signup"`))
+	result, err := nodes.ExecuteAction(context.Background(), node, rc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result != "mailchimp_subscriber_added" {
+		t.Errorf("want 'mailchimp_subscriber_added', got %v", result)
+	}
+	wantAuth := "Basic " + base64.StdEncoding.EncodeToString([]byte("anystring:abc123-us21"))
+	if gotAuth != wantAuth {
+		t.Errorf("want basic auth from manual key path, got %q", gotAuth)
 	}
 }
 

@@ -1,21 +1,27 @@
 "use client";
-import React, { CSSProperties } from "react";
+import React from "react";
 
 // ── Logo ──────────────────────────────────────────────────────────────────
+// /logo-mark.png is a 64x64 downscale of /logo.png (the actual brand mark --
+// also what layout.tsx points the favicon/apple-touch icon at,
+// metadata.icons) -- so the wordmark badge matches the tab icon instead of
+// the hand-drawn mesh glyph this used to render on its own. The full-size
+// /logo.png is ~220KB; every call site here renders at 14-20px, so this
+// component uses the small pre-shrunk copy (~7KB) rather than shipping a
+// favicon-resolution PNG to display an icon this size -- regenerate it with
+// `magick public/logo.png -resize 64x64 -strip public/logo-mark.png` if
+// /logo.png itself ever changes.
 export function Logo({ size = 18 }: { size?: number }) {
   return (
     <div style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
-      <svg width={size} height={size} viewBox="0 0 24 24" fill="none">
-        <circle cx="5" cy="6" r="2.4" fill="var(--accent)" />
-        <circle cx="19" cy="6" r="2.4" fill="currentColor" />
-        <circle cx="12" cy="18" r="2.4" fill="currentColor" />
-        <path
-          d="M5 6 L19 6 M5 6 L12 18 M19 6 L12 18"
-          stroke="currentColor"
-          strokeWidth="1.2"
-          opacity="0.6"
-        />
-      </svg>
+      {/* eslint-disable-next-line @next/next/no-img-element */}
+      <img
+        src="/logo-mark.png"
+        alt=""
+        width={size}
+        height={size}
+        style={{ borderRadius: size * 0.22, flexShrink: 0 }}
+      />
       <span
         style={{
           fontFamily: "var(--font-sans)",
@@ -111,7 +117,7 @@ export function Pill({
 // ── Card ─────────────────────────────────────────────────────────────────
 // The standard elevated panel (bg-elev-1 / border / r-3 / 16px padding) used
 // across the workflows and usage pages. Override via style (e.g. padding: 0)
-// and attach handlers as needed — extra props spread onto the div.
+// and attach handlers as needed -- extra props spread onto the div.
 export function Card({ style, ...rest }: React.HTMLAttributes<HTMLDivElement>) {
   return (
     <div
@@ -126,26 +132,10 @@ export function Card({ style, ...rest }: React.HTMLAttributes<HTMLDivElement>) {
     />
   );
 }
-
-// ── Shared button styles ─────────────────────────────────────────────────
-// Small ghost button used in topbars and row actions on the workflows and
-// usage pages. A style const (not a component) so callers can spread-extend
-// it: { ...ghostBtnSm, width: 28 }.
-export const ghostBtnSm: CSSProperties = {
-  height: 28,
-  padding: "0 10px",
-  fontSize: 12,
-  fontWeight: 500,
-  background: "transparent",
-  border: "1px solid var(--border-strong)",
-  borderRadius: "var(--r-2)",
-  color: "var(--fg-muted)",
-  cursor: "pointer",
-  fontFamily: "var(--font-sans)",
-  display: "inline-flex",
-  alignItems: "center",
-  gap: 4,
-};
+// Shared button styles live in ./buttons, which holds every one of them
+// together with the contract that keeps a label inside its box. Re-exported
+// here because this barrel is what most of the app imports from.
+export { ghostBtnSm } from "./buttons";
 
 // ── Tag ──────────────────────────────────────────────────────────────────
 export function Tag({ children }: { children: React.ReactNode }) {
@@ -181,12 +171,17 @@ export function Tag({ children }: { children: React.ReactNode }) {
 export function Hairline({
   vertical = false,
   length = "100%",
+  className,
 }: {
   vertical?: boolean;
   length?: string | number;
+  // Lets callers attach a responsive utility (e.g. `hide-md`) to a separator
+  // whose neighbours drop out at a breakpoint.
+  className?: string;
 }) {
   return (
     <div
+      className={className}
       style={{
         background: "var(--border)",
         width: vertical ? 1 : length,
@@ -275,6 +270,70 @@ export const IconClose = ({ size = 14 }: { size?: number }) => (
   </svg>
 );
 
+export const IconBackspace = ({ size = 12 }: { size?: number }) => (
+  <svg
+    width={size}
+    height={size}
+    viewBox="0 0 16 16"
+    fill="none"
+    aria-hidden="true"
+    style={{ display: "block" }}
+  >
+    <path
+      d="M6 3.5h6.5a1.5 1.5 0 0 1 1.5 1.5v6a1.5 1.5 0 0 1-1.5 1.5H6L1.5 8z"
+      stroke="currentColor"
+      strokeWidth="1.4"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    />
+    <path
+      d="M7.5 6.5l3 3M10.5 6.5l-3 3"
+      stroke="currentColor"
+      strokeWidth="1.4"
+      strokeLinecap="round"
+    />
+  </svg>
+);
+
+export const IconChat = ({ size = 11 }: { size?: number }) => (
+  <svg
+    width={size}
+    height={size}
+    viewBox="0 0 16 16"
+    fill="none"
+    aria-hidden="true"
+    style={{ display: "block" }}
+  >
+    <path
+      d="M4.5 3h7a2 2 0 0 1 2 2v4a2 2 0 0 1-2 2H7.5L4.5 13.5V11a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2z"
+      stroke="currentColor"
+      strokeWidth="1.4"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    />
+  </svg>
+);
+
+export const IconInspect = ({ size = 11 }: { size?: number }) => (
+  <svg
+    width={size}
+    height={size}
+    viewBox="0 0 16 16"
+    fill="none"
+    aria-hidden="true"
+    style={{ display: "block" }}
+  >
+    <path
+      d="M2.5 5h2.5M8 5h5.5M2.5 11h5.5M11 11h2.5"
+      stroke="currentColor"
+      strokeWidth="1.4"
+      strokeLinecap="round"
+    />
+    <circle cx="6.5" cy="5" r="1.5" stroke="currentColor" strokeWidth="1.4" />
+    <circle cx="9.5" cy="11" r="1.5" stroke="currentColor" strokeWidth="1.4" />
+  </svg>
+);
+
 export const IconGrid = ({ size = 14 }: { size?: number }) => (
   <svg
     width={size}
@@ -288,6 +347,44 @@ export const IconGrid = ({ size = 14 }: { size?: number }) => (
     <rect x="9" y="2" width="5" height="5" />
     <rect x="2" y="9" width="5" height="5" />
     <rect x="9" y="9" width="5" height="5" />
+  </svg>
+);
+
+export const IconSpeaker = ({ size = 12 }: { size?: number }) => (
+  <svg
+    width={size}
+    height={size}
+    viewBox="0 0 16 16"
+    fill="none"
+    aria-hidden="true"
+    style={{ display: "block" }}
+  >
+    <path d="M2 6h2.5L8.5 3v10L4.5 10H2z" fill="currentColor" />
+    <path
+      d="M10.5 5.3a4 4 0 0 1 0 5.4M12.3 3.7a6.5 6.5 0 0 1 0 8.6"
+      stroke="currentColor"
+      strokeWidth="1.3"
+      strokeLinecap="round"
+    />
+  </svg>
+);
+
+export const IconMic = ({ size = 12 }: { size?: number }) => (
+  <svg
+    width={size}
+    height={size}
+    viewBox="0 0 16 16"
+    fill="none"
+    aria-hidden="true"
+    style={{ display: "block" }}
+  >
+    <rect x="5.5" y="1.5" width="5" height="8" rx="2.5" stroke="currentColor" strokeWidth="1.3" />
+    <path
+      d="M3.5 7.5a4.5 4.5 0 0 0 9 0M8 12v2.5M5.5 14.5h5"
+      stroke="currentColor"
+      strokeWidth="1.3"
+      strokeLinecap="round"
+    />
   </svg>
 );
 

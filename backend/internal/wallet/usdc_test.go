@@ -75,3 +75,40 @@ func TestSignUSDCPaymentGroupProducesTwoTxnsWithCorrectIndex(t *testing.T) {
 		t.Fatalf("want asset 10458941, got %d", stx.Txn.XferAsset)
 	}
 }
+
+// TestSignUSDCPaymentGroupRepeatedIdenticalCallsProduceDistinctTxids guards
+// against the exact bug that was silently failing ~1 in 4 platform-fee
+// settlements: the fee is a flat amount paid from the same wallet to the
+// same wallet every call, so two calls landing in the same algod round used
+// to hash to byte-identical transactions -- algod then rejects the second
+// as an exact duplicate even though nothing about the payment was invalid.
+func TestSignUSDCPaymentGroupRepeatedIdenticalCallsProduceDistinctTxids(t *testing.T) {
+	svc := testWalletService(t)
+	_, encMnemonic, err := svc.GenerateWallet()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	const (
+		payTo        = "LXPC4GQPYH2EZQX2QDYMHCP2I7MXIZMVRPIYTQ3D7R7HXJ4SIHCSYLF5YA"
+		assetID      = 10458941
+		amount       = 1_500_000 // the platform fee's exact flat amount
+		feePayerAddr = "ZMFK2OI7ZBD2U27ISERZC4S6LKM6WMFJPZQ4MYNJDZ2VNBNMBA67RA22AA"
+	)
+
+	group1, _, err := svc.SignUSDCPaymentGroup(context.Background(), encMnemonic, payTo, assetID, amount, feePayerAddr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	group2, _, err := svc.SignUSDCPaymentGroup(context.Background(), encMnemonic, payTo, assetID, amount, feePayerAddr)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if group1[0] == group2[0] {
+		t.Fatal("two identical-input calls produced byte-identical fee-payer stub txns -- would collide to the same txid if landed in the same algod round")
+	}
+	if group1[1] == group2[1] {
+		t.Fatal("two identical-input calls produced byte-identical payment txns -- would collide to the same txid if landed in the same algod round")
+	}
+}

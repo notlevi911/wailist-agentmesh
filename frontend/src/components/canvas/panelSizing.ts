@@ -9,17 +9,22 @@ export interface Bounds {
 }
 
 export const PALETTE: Bounds = { min: 200, max: 460, default: 280 };
-export const INSPECTOR: Bounds = { min: 260, max: 560, default: 320 };
+// The rail now hosts the Tendril terminal, so its max doubles as a column
+// budget: at fontSize 12 (~7.2px/cell, less a ~14px scrollbar) 640px clears
+// the de-facto 80-column floor, where 560 gave only ~75. PALETTE.min (200) +
+// 640 + MIN_CANVAS (320) = 1160, so a >=1160px window honours it and narrower
+// ones are already handled by clampWidth's container rule below.
+export const INSPECTOR: Bounds = { min: 260, max: 640, default: 320 };
 
 // Above this palette width, the item list reflows from one column into two.
 // Set to a width the palette can actually reach on a halved window: with the
 // inspector at its default (320) and MIN_CANVAS (320) reserved, a ~960px window
-// caps the palette at 320px — so a higher threshold could never trigger there.
+// caps the palette at 320px -- so a higher threshold could never trigger there.
 // At 300px each of the two cells is ~137px (icon + a truncating label), which
 // is tight but legible; labels ellipsis inside the cell.
 export const PALETTE_TWO_COL_MIN = 300;
 
-// The graph column is never allowed to shrink below this — the whole point of
+// The graph column is never allowed to shrink below this -- the whole point of
 // the feature is to keep the workflow visible between the two panels.
 export const MIN_CANVAS = 320;
 
@@ -42,7 +47,7 @@ export function clampWidth(
   if (Number.isFinite(containerWidth) && containerWidth > 0) {
     const maxAllowed = containerWidth - otherPanelWidth - MIN_CANVAS;
     // If there isn't even room for the panel's min, fall back to min and let
-    // the canvas column (min-width:0) absorb the overflow — best we can do
+    // the canvas column (min-width:0) absorb the overflow -- best we can do
     // without a collapse toggle.
     w = maxAllowed >= bounds.min ? Math.min(w, maxAllowed) : bounds.min;
   }
@@ -55,7 +60,7 @@ export interface PanelWidths {
   inspectorW: number;
 }
 
-// Best-effort persistence — mirrors the tolerant load pattern used by the
+// Best-effort persistence -- mirrors the tolerant load pattern used by the
 // credits store. Never throws; returns null when unavailable or corrupt.
 export function loadWidths(): PanelWidths | null {
   if (typeof window === "undefined") return null;

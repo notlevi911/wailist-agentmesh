@@ -15,6 +15,7 @@ This document is for developers who want to contribute to the AgentMesh platform
 - [Frontend architecture](#frontend-architecture)
 - [Backend architecture](#backend-architecture)
 - [Database schema](#database-schema)
+- [Hacktoberfest](#hacktoberfest)
 - [Making a contribution](#making-a-contribution)
 
 ---
@@ -66,19 +67,38 @@ agentmesh/
 │
 ├── backend/
 │   ├── cmd/server/         Entry point — sets up router, runs migrations, starts HTTP
+│   ├── cmd/walletgen/      Dev tool — generate an Algorand keypair
+│   ├── cmd/x402pay/        Dev tool — drive an x402 payment from the CLI
 │   └── internal/
 │       ├── api/
-│       │   ├── handlers/   One file per resource (auth, oauth, workflows, runs, deploy, tools, waitlist)
+│       │   ├── router.go   Route table
+│       │   ├── handlers/   One file per resource (auth, oauth, connector_oauth,
+│       │   │               oauth2creds, workflows, runs, deploy, tools, bazaar,
+│       │   │               payments, usage, secrets, leases, tendril_console,
+│       │   │               x402relay, waitlist)
 │       │   └── middleware.go  CORS, JWT auth, SSE token fallback
 │       ├── engine/
 │       │   ├── runner.go   Topological executor — parallel level execution
+│       │   ├── graph.go    Topological sort + attach-map
+│       │   ├── context.go  RunContext + per-run debit ledger
+│       │   ├── tendril_reaper.go  Releases leases whose funded window closed
 │       │   └── nodes/
-│       │       ├── provider.go   LLM callers + agentic function-calling loop
-│       │       ├── tool402.go    x402 payment flow
-│       │       ├── tool.go       HTTP tool + SSRF protection
-│       │       └── action.go     Email (Resend) + webhook actions
+│       │       ├── provider.go       LLM callers + agentic function-calling loop
+│       │       ├── tool402.go / walletpay.go / runfund.go  x402 payment + run-level funding
+│       │       ├── tool.go           HTTP tool + SSRF protection + websearch/calc/datetime
+│       │       ├── action.go + connectors_*.go + google.go  email / webhook / ~40 connectors
+│       │       ├── bazaar.go         Bazaar discovery extension
+│       │       ├── billing.go / tier.go  BYOK flat-fee billing
+│       │       └── tendril.go        Compute leasing
 │       ├── db/             PostgreSQL queries (pgx/v5) + migrations
 │       ├── models/         Shared types — WorkflowNode, ParamDef, AgentWallet, etc.
+│       ├── bazaar/         Mirrors GoPlausible's x402 catalog, filtered to payable Algorand endpoints
+│       ├── payments/       Cashfree (INR) + NOWPayments (crypto) clients
+│       ├── oauthcred/      Persisted, refreshable OAuth2 connections for workflow nodes
+│       ├── tendril/        Typed client for the Tendril compute registry
+│       ├── sshkeys/        Per-lease ed25519 keypair for a rented machine
+│       ├── alert/          Optional Discord-webhook audit log
+│       ├── x402/           Schema-exact v2 payment payload types
 │       ├── sse/            In-process pub/sub for streaming run logs
 │       └── wallet/         Algorand keypair generation, encryption, signing
 │
@@ -155,6 +175,20 @@ Optional (needed for specific features):
 | `GITHUB_CLIENT_ID` / `GITHUB_CLIENT_SECRET` | GitHub OAuth |
 | `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` | Google OAuth |
 | `RESEND_API_KEY` | Email action node |
+| `TENDRIL_REGISTRY_URL` | Tendril compute registry (default `https://tendrilregister.007575.xyz`). Unset disables tendril nodes — they fail closed. |
+| `MAX_RELAY_OUTBOUND_USD_MICROS` | Ceiling on one relayed x402 payment (default `20000000`, $20.00 — raised from $5.00 because a 2-hour rent on a $6/hr machine tops the pool up by $12 in a single call). |
+
+### The two Tendril balances
+
+Tendril keys credit to the paying address, and the payer is always Wallet 2 (`PLATFORM_WALLET_*`) — so on Tendril's own side there is exactly **one** balance for all of AgentMesh combined. AgentMesh therefore keeps a **per-user sub-ledger** on top of that shared pool: `users.tendril_credit_usd_micros` plus the append-only `tendril_credit_ledger` table. A user may only ever spend what they themselves converted into it.
+
+A Topup node settles real USDC into the shared pool and, in the same transaction, moves the same value from that user's AgentMesh credits into their Tendril credits — one transfer, two ledger rows. Renting is a flat 1¢ gate fee that does **not** buy time; the hours themselves come out of the user's Tendril credit at the machine's hourly rate. Release is where compute is actually billed — Tendril reports what it charged, and the unused remainder of the reservation returns to that user's Tendril credit (never to AgentMesh credits, which would let a user cycle rent/release to convert Tendril credit back into general platform credit the pool cannot honor). The reaper exists because an unreleased lease keeps metering against the pool even after its funded window closes.
+
+The invariant every Tendril-touching change must preserve:
+
+```
+SUM(users.tendril_credit_usd_micros) + (hours currently metering) <= Tendril pool balance at Wallet 2
+```
 
 ---
 
@@ -218,14 +252,14 @@ When a user clicks "Discover" on an x402 Tool node, the backend hits the endpoin
 
 ### LLM function-calling loop
 
-For Gemini and OpenAI, the agent runs a loop:
+All five providers — Gemini, OpenAI, Anthropic, Groq, Mistral — run the loop (Groq and Mistral over the OpenAI-compatible path):
 
 1. Call LLM with system prompt, user input, and function declarations built from `DiscoveredParams`
 2. If the LLM returns a `functionCall` → execute the tool, feed the result back as a function response
 3. Call LLM again with the updated conversation
-4. Repeat up to 15 iterations until the LLM returns a plain text response
+4. Repeat up to `maxToolIterations` (15) until the LLM returns a plain text response
 
-Anthropic is basic chat only (function-calling loop coming). Groq and Mistral use the OpenAI-compatible path.
+Keys are BYOK by default; a platform-key mode falls back to platform-held keys with metered, cost-plus usage.
 
 ### SSE streaming
 
@@ -291,11 +325,13 @@ Each run has a channel in the in-process SSE broker (`internal/sse`). The runner
 
 ```bash
 cd backend
-go test ./...           # run all tests
-go test ./... -cover    # with coverage percentages
-go test ./... -v        # verbose — see each test name pass/fail
+go test -p 1 ./...           # run all tests
+go test -p 1 ./... -cover    # with coverage percentages
+go test -p 1 ./... -v        # verbose — see each test name pass/fail
 go test ./internal/engine/nodes/... -run TestX402  # run a specific test or pattern
 ```
+
+`-p 1` matters whenever `TEST_DATABASE_URL` is set (see below): every DB-touching package independently runs golang-migrate's `Up()` against the same database at test-setup time, and Go's default package parallelism can start several of those at once, occasionally deadlocking on `pg_advisory_lock` (`SQLSTATE 40P01`). Running a single package (like the `-run TestX402` example above) never hits this, so it's fine without `-p 1`. CI only applies `-p 1` to the packages that actually touch the database (`internal/api/handlers`, `internal/db`, `internal/engine`, `internal/scheduler`) so everything else still runs in parallel — `-p 1 ./...` here is just the simpler one-command version for local runs.
 
 ### Current coverage by package
 
@@ -354,7 +390,7 @@ go test ./internal/engine/nodes/... -run TestX402  # run a specific test or patt
 Tests in `internal/db` and several handler/runner tests are skipped unless `TEST_DATABASE_URL` is set:
 
 ```bash
-TEST_DATABASE_URL=postgres://postgres:postgres@localhost:5432/agentmesh_test go test ./...
+TEST_DATABASE_URL=postgres://postgres:postgres@localhost:5432/agentmesh_test go test -p 1 ./...
 ```
 
 These tests create and tear down their own schema, so they're safe to run against a throwaway local database. Do **not** point them at a production database.
@@ -374,13 +410,36 @@ These tests create and tear down their own schema, so they're safe to run agains
 
 ---
 
+## Hacktoberfest
+
+This repo participates in **Hacktoberfest**. Pull requests opened against it during October count toward your Hacktoberfest total once a maintainer merges them, approves them, or labels them `hacktoberfest-accepted`.
+
+**What counts**
+
+- A PR that fixes a real bug, adds a genuinely useful feature, or improves docs/tests in a way we'd merge any month of the year.
+- Work tied to an issue labelled `hacktoberfest` or `good first issue`. Comment on the issue to claim it before you start so two people don't collide.
+
+**What gets your PR marked `spam` / `invalid` (and does not count)**
+
+- Whitespace-only diffs, README typo swaps with no substance, automated or templated PRs, duplicate PRs across many repos.
+- Anything that ignores the contribution rules below — untested changes, unrelated file churn, drive-by formatter runs.
+
+**Good starting points**
+
+- `provider_test.go` has a known build error — `ExecuteAgent`'s signature changed and the test wasn't updated. Small, self-contained, well-scoped.
+- Filter issues by the `good first issue` and `hacktoberfest` labels.
+
+Two low-effort PRs flagged as spam earn a Hacktoberfest disqualification for the whole event, so aim for one solid PR over several throwaway ones. If you're unsure whether an idea is substantial enough, open an issue and ask first.
+
+---
+
 ## Making a contribution
 
 1. **Open an issue first** for anything non-trivial — feature ideas, architectural changes, new node types. No point writing code that won't get merged.
 2. **Fork and branch** — name your branch something descriptive (`feat/memory-node`, `fix/sse-timeout`).
 3. **Keep PRs focused** — one thing per PR. A bug fix doesn't need a refactor alongside it.
 4. **Match the existing style** — no formatter changes, no linting rule updates, no unrelated file edits.
-5. **Test what you touch** — add or update `_test.go` files for whatever you change. Run `go test ./...` before opening a PR.
+5. **Test what you touch** — add or update `_test.go` files for whatever you change. Run `go test -p 1 ./...` before opening a PR.
 6. **Open the PR against `master`**.
 
 For bugs: include what you expected, what happened, and how to reproduce it.

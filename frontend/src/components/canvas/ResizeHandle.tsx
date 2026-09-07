@@ -3,7 +3,7 @@ import { useEffect, useRef, useState } from "react";
 
 // A thin vertical drag bar that sits between the canvas and a side panel.
 // Uses Pointer Events with pointer capture so the drag keeps tracking even when
-// the cursor leaves the window and releases cleanly on pointerup/cancel — no
+// the cursor leaves the window and releases cleanly on pointerup/cancel -- no
 // window-level listeners to leak. The parent owns the width state and does the
 // clamping (it knows the container width); this component only reports the
 // requested value.

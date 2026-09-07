@@ -1,0 +1,181 @@
+/* ── Responsive layer ─────────────────────────────────────────────────────
+   Almost every surface in this app is styled with inline React styles, which
+   media queries cannot reach. Anything whose only reason to change is the
+   viewport width lives here as a class instead, so the breakpoints sit in one
+   file rather than being re-derived per component in JavaScript.
+
+   The scale extends the one breakpoint the app already had (`.usage-split` at
+   1024px) rather than introducing a second, competing set:
+
+     <= 1024px   compact  — the studio collapses from three columns to one
+     <=  768px   mobile   — wide tables become cards, the top nav collapses
+     <=  480px   small    — tightest padding, single column everywhere
+
+   Imported from the top of globals.css, so these rules land BEFORE it: every
+   selector here is a new `.am-*` class with nothing to override. A rule that
+   genuinely needs to beat an existing globals.css declaration belongs in
+   globals.css next to the rule it overrides, not here.
+   ───────────────────────────────────────────────────────────────────────── */
+
+/* ── Full-viewport shells ───────────────────────────────────────────────── */
+/* `100vh` on a mobile browser measures the LARGE viewport — the height the
+   page would have with the toolbars retracted — so a `height: 100vh` app shell
+   is taller than what is actually on screen and its bottom row hides behind
+   the address bar. `dvh` tracks the visible area as that chrome comes and
+   goes. The `vh` declaration stays first as the fallback for engines without
+   `dvh`; an inline style cannot express a two-value fallback, which is the
+   whole reason these shells need a class instead of a style prop. */
+.am-viewport {
+  height: 100vh;
+  height: 100dvh;
+}
+
+/* Bottom-docked bars sit under the home indicator on notched phones without
+   this. `0px` (not `0`) is deliberate — env() fallbacks must carry a unit. */
+.am-safe-bottom {
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+}
+/* ── Studio, compact ────────────────────────────────────────────────────── */
+/* The studio is a three-column desktop IDE: palette | graph | rail. Read-only
+   already drops the palette, but the rail's 320px still leaves ~55px of graph
+   on a 375px screen. Below the compact breakpoint the two remaining columns
+   stack instead, so the graph gets the whole width and the rail becomes a
+   sheet the reader pulls up when they want it.
+   Widths/structure are switched in React (useIsCompact) because this changes
+   which elements mount, not just how they look — these rules dress the result. */
+.am-studio-row {
+  flex: 1;
+  display: flex;
+  position: relative;
+  overflow: hidden;
+}
+.am-studio-row[data-compact="true"] {
+  flex-direction: column;
+}
+
+/* Sheet sits under the graph in flow, not over it: overlaying would hide the
+   node whose config the reader just opened the sheet to read. */
+.am-studio-sheet {
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  background: var(--bg-elev-1);
+  border-top: 1px solid var(--border);
+}
+.am-studio-sheet[data-open="true"] {
+  /* Just over half the screen: enough to read a node's config without losing
+     sight of the graph it belongs to. */
+  height: 55dvh;
+}
+
+/* The grip is 14px of visible bar in a 44px target — the minimum a thumb can
+   reliably hit, per the same rule .pw-reveal follows. */
+.am-sheet-grip {
+  flex-shrink: 0;
+  height: 44px;
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 0;
+  background: transparent;
+  border: none;
+  color: var(--fg-dim);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  cursor: pointer;
+  transition: color 0.12s var(--ease);
+}
+.am-sheet-grip:hover {
+  color: var(--fg-muted);
+}
+.am-sheet-grip:active {
+  transform: scale(0.97);
+}
+.am-sheet-grip:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+  border-radius: var(--r-2);
+}
+.am-sheet-grip::before {
+  content: "";
+  width: 34px;
+  height: 4px;
+  border-radius: 999px;
+  background: var(--border-strong);
+}
+@media (prefers-reduced-motion: reduce) {
+  .am-sheet-grip {
+    transition: none;
+  }
+  .am-sheet-grip:active {
+    transform: none;
+  }
+}
+
+/* ── App top bar ────────────────────────────────────────────────────────── */
+.am-nav-link {
+  height: 28px;
+  padding: 0 12px;
+}
+
+@media (max-width: 768px) {
+  /* 28px is a comfortable pointer target and a poor thumb one. */
+  .am-nav-link {
+    flex: 1;
+    height: 44px;
+    justify-content: center;
+  }
+}
+
+/* Usage tables keep their columns and scroll sideways inside their own card,
+   so the page body never does. */
+@media (max-width: 1024px) {
+  .am-usage-table {
+    overflow-x: auto;
+    overscroll-behavior-x: contain;
+    -webkit-overflow-scrolling: touch;
+  }
+}
+
+/* ── Assorted fixed grids ───────────────────────────────────────────────── */
+.am-grid-4 {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+@media (max-width: 768px) {
+  .am-grid-4 {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+@media (max-width: 480px) {
+  .am-grid-4 {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+/* The rail's segmented switch is sized for a pointer (26px) because in its own
+   column that is all it ever meets. Inside the bottom sheet it is tapped, so it
+   takes the full 44px target -- the same floor .pw-reveal and .am-sheet-grip
+   hold to. Scoped to the sheet so the desktop rail keeps its density. */
+.am-studio-sheet .rail-switch__seg {
+  min-height: 44px;
+}
+
+/* ── Studio topbar ──────────────────────────────────────────────────────── */
+/* The bar carries brand, breadcrumb, workflow name, four counters and three
+   actions. Below ~900px that no longer fits, and what gave way was the
+   workflow NAME -- it was squeezed to 12px, which is worse than useless.
+   The three ancillary counters go instead: they are tallies of what the canvas
+   already shows, and both they and the credit balance appear in full on
+   /usage. The credit balance stays, because it is the one number that decides
+   whether a run can happen. */
+@media (max-width: 900px) {
+  .am-studio-stats-extra {
+    display: none;
+  }
+}

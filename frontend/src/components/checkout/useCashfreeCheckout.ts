@@ -56,7 +56,7 @@ export function useCashfreeCheckout({
         return;
       }
 
-      // Payment may be complete — verify server-side to get the credited amount.
+      // Payment may be complete -- verify server-side to get the credited amount.
       const verification = await payments.verifyCashfreePayment(order.order_id);
       cbs.current.onSuccess(verification.credited_usd_micros);
     } catch (err) {

@@ -176,3 +176,150 @@ func TestCreateAndGetWorkflow(t *testing.T) {
 		t.Fatalf("get: want 200 got %d", w2.Code)
 	}
 }
+
+// TestWebhookSecretGeneratedAndPersisted verifies the webhookSecret
+// lifecycle a webhook trigger node relies on for PublicTrigger auth (see
+// runs_test.go): generated on first save, returned in plaintext (not the
+// EncSentinel every other secret gets) so the owner can actually copy it,
+// stable across re-saves, and stored encrypted at rest in the DB.
+func TestWebhookSecretGeneratedAndPersisted(t *testing.T) {
+	d := testDeps(t)
+
+	wf, err := d.Store.CreateWorkflow(t.Context(), "Webhook Secret Test", "dev")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { d.Store.DeleteWorkflow(context.Background(), wf.ID) })
+
+	body, _ := json.Marshal(map[string]any{
+		"name": "Webhook Secret Test",
+		"nodes": []map[string]any{
+			{"id": "n1", "type": "trigger", "template": "webhook"},
+		},
+		"edges": []any{},
+	})
+	req := httptest.NewRequest(http.MethodPut, "/workflows/"+wf.ID, bytes.NewReader(body))
+	req = req.WithContext(context.WithValue(req.Context(), handlers.CtxUserID, "dev"))
+	req = withURLParam(req, "id", wf.ID)
+	w := httptest.NewRecorder()
+	d.UpdateWorkflow(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("update: want 200 got %d body=%s", w.Code, w.Body.String())
+	}
+
+	var updated models.Workflow
+	json.NewDecoder(w.Body).Decode(&updated)
+	secret := updated.Nodes[0].Secrets["webhookSecret"]
+	if secret == "" {
+		t.Fatal("expected a webhookSecret to be generated")
+	}
+	if secret == handlers.EncSentinel || strings.HasPrefix(secret, "enc:") {
+		t.Fatalf("expected plaintext secret in response, got %q", secret)
+	}
+
+	// GET returns the identical plaintext secret, not the sentinel other
+	// secrets get.
+	req2 := httptest.NewRequest(http.MethodGet, "/workflows/"+wf.ID, nil)
+	req2 = req2.WithContext(context.WithValue(req2.Context(), handlers.CtxUserID, "dev"))
+	req2 = withURLParam(req2, "id", wf.ID)
+	w2 := httptest.NewRecorder()
+	d.GetWorkflow(w2, req2)
+	var fetched models.Workflow
+	json.NewDecoder(w2.Body).Decode(&fetched)
+	if fetched.Nodes[0].Secrets["webhookSecret"] != secret {
+		t.Fatalf("GET secret: want %q got %q", secret, fetched.Nodes[0].Secrets["webhookSecret"])
+	}
+
+	// Raw DB value is encrypted, never plaintext at rest.
+	rawWF, err := d.Store.GetWorkflow(t.Context(), wf.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(rawWF.Nodes[0].Secrets["webhookSecret"], "enc:") {
+		t.Errorf("DB value: want enc: prefix, got %q", rawWF.Nodes[0].Secrets["webhookSecret"])
+	}
+
+	// Re-saving (a normal canvas autosave) does not rotate the secret.
+	w3 := httptest.NewRecorder()
+	req3 := httptest.NewRequest(http.MethodPut, "/workflows/"+wf.ID, bytes.NewReader(body))
+	req3 = req3.WithContext(context.WithValue(req3.Context(), handlers.CtxUserID, "dev"))
+	req3 = withURLParam(req3, "id", wf.ID)
+	d.UpdateWorkflow(w3, req3)
+	var resaved models.Workflow
+	json.NewDecoder(w3.Body).Decode(&resaved)
+	if resaved.Nodes[0].Secrets["webhookSecret"] != secret {
+		t.Fatalf("secret rotated on re-save: want %q got %q", secret, resaved.Nodes[0].Secrets["webhookSecret"])
+	}
+}
+
+// TestUpdateWorkflowClampsRetryFields guards against a node being saved
+// with an unbounded retry configuration -- MaxRetries/RetryBackoffMs had no
+// server-side cap, so a workflow could be saved to retry a node for hours
+// against a third-party endpoint. UpdateWorkflow must clamp both fields to
+// models.MaxNodeRetries/MaxNodeRetryBackoffMs (and floor a negative value
+// to 0) regardless of what the client sends.
+func TestUpdateWorkflowClampsRetryFields(t *testing.T) {
+	d := testDeps(t)
+	ctx := context.Background()
+
+	wf, err := d.Store.CreateWorkflow(ctx, "Retry Clamp Test", "dev")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { d.Store.DeleteWorkflow(context.Background(), wf.ID) })
+
+	body, _ := json.Marshal(map[string]any{
+		"name": "Retry Clamp Test",
+		"nodes": []map[string]any{
+			{"id": "n1", "type": "trigger", "template": "manual"},
+			{"id": "n2", "type": "tool", "template": "http", "url": "http://example.com", "method": "GET",
+				"maxRetries": 100000, "retryBackoffMs": 600000},
+			{"id": "n3", "type": "end"},
+			{"id": "n4", "type": "tool", "template": "http", "url": "http://example.com", "method": "GET",
+				"maxRetries": -5, "retryBackoffMs": -5},
+		},
+		"edges": []map[string]any{
+			{"id": "e1", "from": "n1", "to": "n2", "kind": "flow"},
+			{"id": "e2", "from": "n2", "to": "n3", "kind": "flow"},
+		},
+	})
+	req := httptest.NewRequest(http.MethodPut, "/workflows/"+wf.ID, bytes.NewReader(body))
+	req = req.WithContext(context.WithValue(req.Context(), handlers.CtxUserID, "dev"))
+	req = withURLParam(req, "id", wf.ID)
+	w := httptest.NewRecorder()
+	d.UpdateWorkflow(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("want 200 got %d body=%s", w.Code, w.Body.String())
+	}
+
+	var saved models.Workflow
+	json.NewDecoder(w.Body).Decode(&saved)
+	byID := map[string]models.WorkflowNode{}
+	for _, n := range saved.Nodes {
+		byID[n.ID] = n
+	}
+	if got := byID["n2"].MaxRetries; got != models.MaxNodeRetries {
+		t.Errorf("n2 MaxRetries: want clamped to %d, got %d", models.MaxNodeRetries, got)
+	}
+	if got := byID["n2"].RetryBackoffMs; got != models.MaxNodeRetryBackoffMs {
+		t.Errorf("n2 RetryBackoffMs: want clamped to %d, got %d", models.MaxNodeRetryBackoffMs, got)
+	}
+	if got := byID["n4"].MaxRetries; got != 0 {
+		t.Errorf("n4 MaxRetries: want negative floored to 0, got %d", got)
+	}
+	if got := byID["n4"].RetryBackoffMs; got != 0 {
+		t.Errorf("n4 RetryBackoffMs: want negative floored to 0, got %d", got)
+	}
+
+	// Re-fetching from the DB confirms the clamp was actually persisted,
+	// not just reflected in this response.
+	fetched, err := d.Store.GetWorkflow(ctx, wf.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, n := range fetched.Nodes {
+		if n.ID == "n2" && (n.MaxRetries != models.MaxNodeRetries || n.RetryBackoffMs != models.MaxNodeRetryBackoffMs) {
+			t.Errorf("persisted n2: want clamped values, got maxRetries=%d retryBackoffMs=%d", n.MaxRetries, n.RetryBackoffMs)
+		}
+	}
+}

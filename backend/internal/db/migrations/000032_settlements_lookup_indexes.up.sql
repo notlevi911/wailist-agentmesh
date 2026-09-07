@@ -1,0 +1,21 @@
+-- Index for ListSettlements (usage.go), which walks run_logs -> runs ->
+-- workflows to find the settlement receipts belonging to one user. Without
+-- this, that join reaches workflows by sequential scan on every
+-- /usage/settlements request.
+--
+-- The endpoint's ?limit= caps the rows returned but not the work done: the
+-- DISTINCT ON that de-duplicates a run-funded run's repeated tx id has to see
+-- every candidate row before any limit can apply, so this read grows with a
+-- user's total run history rather than with the page size.
+--
+-- Not CONCURRENTLY: golang-migrate runs each migration inside a transaction,
+-- which CREATE INDEX CONCURRENTLY cannot join. workflows holds one row per
+-- workflow (not per log line), so the SHARE lock this takes at startup is
+-- brief. Every index migration in this directory has the same shape.
+--
+-- Deliberately NOT adding a run_logs index here: lookup by run_id is already
+-- served by idx_run_logs_run_id (run_id, step_index) from 000001, and no
+-- index can supply the inner ORDER BY, which leads with the DISTINCT ON CASE
+-- expression rather than a column. One on (run_id, ts) would add write
+-- amplification to the highest-volume table in the schema and buy nothing.
+CREATE INDEX IF NOT EXISTS idx_workflows_user_id ON workflows (user_id);
