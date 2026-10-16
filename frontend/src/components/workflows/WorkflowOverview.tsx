@@ -30,7 +30,7 @@ export function WorkflowOverview() {
           </button>
         </div>
         <p className={styles.creditBalance}>
-          {balanceKnown ? `$${balanceUSD.toFixed(2)}` : "—"}
+          {balanceKnown ? `$${balanceUSD.toFixed(2)}` : "-"}
         </p>
         <p className={styles.creditHint}>
           {balanceKnown ? "Spent as your agents call paid tools and models." : "Loading balance…"}

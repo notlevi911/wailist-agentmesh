@@ -28,26 +28,33 @@ export const NODE_TYPES: Record<string, NodeTypeMeta> = {
   google: { w: 220, h: 76, ports: ["in", "out"] },
 };
 
-// "cron" (Schedule) intentionally omitted: there is no scheduler in the
-// backend (grep -ri "cron|schedul" backend/internal turns up nothing
-// non-test), so a workflow whose only trigger is Schedule would never fire
-// on its own. Re-add once a real scheduler exists -- see the node-cleanup
-// plan's Part B5.
+// Schedules belong to the workflow. The backend scheduler starts its manual
+// trigger, so a separate cron trigger is not offered in the palette.
 export const TRIGGER_TEMPLATES = [
   { id: "manual", name: "Manual Trigger", desc: "Click to test", icon: "▶" },
   { id: "chat", name: "On Chat Message", desc: "Inbound chat", icon: "◴" },
   { id: "webhook", name: "Webhook", desc: "HTTP POST endpoint", icon: "◷" },
 ];
 
+// Preserve generated backend catalog copy while updating frontend labels.
 export const AGENT_TEMPLATES = [
   { id: "agent", name: "AI Agent", desc: "Reasoning + tool use", icon: "◇" },
   {
     id: "router",
-    name: "Router Agent",
-    desc: "Classify + dispatch",
+    name: "Classifier Agent",
+    catalogName: "Router Agent",
+    desc: "Classify input with a prompt",
+    catalogDesc: "Classify + dispatch",
     icon: "◊",
   },
-  { id: "human", name: "Human-in-loop", desc: "Approval gate", icon: "○" },
+  {
+    id: "human",
+    name: "Review Agent",
+    catalogName: "Human-in-loop",
+    desc: "Review input with a prompt",
+    catalogDesc: "Approval gate",
+    icon: "○",
+  },
 ];
 
 export const PROVIDER_TEMPLATES = [
@@ -551,21 +558,24 @@ export const ACTION_TEMPLATES = [
   },
   {
     id: "algorand_account",
-    name: "Algorand Account",
+    name: "Wallet Account",
+    catalogName: "Algorand Account",
     desc: "Balance + ASA holdings",
     icon: "al",
     category: "Utilities",
   },
   {
     id: "algorand_transactions",
-    name: "Algorand History",
+    name: "Wallet History",
+    catalogName: "Algorand History",
     desc: "Recent transactions for an address",
     icon: "al",
     category: "Utilities",
   },
   {
     id: "algorand_asset",
-    name: "Algorand Asset",
+    name: "Asset Details",
+    catalogName: "Algorand Asset",
     desc: "Look up any ASA by id",
     icon: "al",
     category: "Utilities",

@@ -117,7 +117,7 @@ describe("BillingPage in the Android app", () => {
     await act(async () => {});
 
     const spent = screen.getByText("Spent · 30d").nextElementSibling;
-    expect(spent?.textContent).toBe("—");
+    expect(spent?.textContent).toBe("-");
     expect(spent?.textContent).not.toContain("$0");
   });
 

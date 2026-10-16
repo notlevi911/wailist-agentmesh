@@ -99,7 +99,7 @@ export function distanceM(a: Point, b: Point): number {
  * whose own error is tens of metres.
  */
 export function formatDistance(m: number): string {
-  if (!Number.isFinite(m)) return "—";
+  if (!Number.isFinite(m)) return "-";
   const abs = Math.abs(m);
   if (abs < 1_000) return `${Math.round(m)} m`;
   if (abs < 10_000) return `${(m / 1_000).toFixed(1)} km`;

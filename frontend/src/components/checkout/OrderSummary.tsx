@@ -84,7 +84,7 @@ export function OrderSummary({
             color: "var(--accent)",
           }}
         >
-          {credits === null ? "≈ —" : `≈ $${credits.toFixed(2)} credits`}
+          {credits === null ? "≈ -" : `≈ $${credits.toFixed(2)} credits`}
         </span>
       </div>
     </div>

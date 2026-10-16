@@ -89,7 +89,7 @@ function WorkflowDetails({ workflow }: { workflow: Workflow }) {
             <dd>
               {workflow.totalRuns !== undefined
                 ? count.format(workflow.totalRuns)
-                : "—"}
+                : "-"}
             </dd>
           </div>
           <div>
@@ -496,11 +496,11 @@ export function WorkflowSummary({ workflowId }: { workflowId: string }) {
   // undeployed workflow from running, the next step is the desktop app.
   const blocked = workflow
     ? chat
-      ? "This workflow starts from a chat message — run it from the AgentMesh desktop app"
+      ? "This workflow starts from a chat message: run it from the AgentMesh desktop app"
       : workflow.status === "paused"
-        ? "Paused — resume it in the AgentMesh desktop app"
+        ? "Paused: resume it in the AgentMesh desktop app"
         : workflow.status !== "deployed"
-          ? "Not deployed yet — finish and deploy it in the AgentMesh desktop app"
+          ? "Not deployed yet: finish and deploy it in the AgentMesh desktop app"
           : null
     : null;
   const status =

@@ -75,7 +75,7 @@ export function TerminalTab({
 
     ws.onopen = () => {
       term.writeln(
-        "\x1b[2m connected — this is a real machine you are paying for \x1b[0m",
+        "\x1b[2m Connected to your rented machine \x1b[0m",
       );
       sendResize();
     };
@@ -93,9 +93,9 @@ export function TerminalTab({
     // explicit Release button or the lease's own funded-window reaper,
     // neither of which this handler calls.
     ws.onclose = (ev) => {
-      const reason = ev.reason ? ` — ${ev.reason}` : "";
+      const reason = ev.reason ? `: ${ev.reason}` : "";
       term.writeln(
-        `\r\n\x1b[2m disconnected${reason} (the lease itself is unaffected — reopen the terminal or check "Online machines" if the box dropped) \x1b[0m`,
+        `\r\n\x1b[2m Disconnected${reason}. Reopen the terminal or check "Online machines". The lease remains active. \x1b[0m`,
       );
     };
 

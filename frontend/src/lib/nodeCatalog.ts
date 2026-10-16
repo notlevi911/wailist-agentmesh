@@ -105,8 +105,8 @@ function fromConnectorTable(id: string): CatalogField[] {
     key: f.key,
     where: f.kind,
     label: f.label,
-    ...(f.hint ? { hint: f.hint } : {}),
-    ...(f.placeholder ? { placeholder: f.placeholder } : {}),
+    ...(f.hint ? { hint: f.catalogHint ?? f.hint } : {}),
+    ...(f.placeholder ? { placeholder: f.catalogPlaceholder ?? f.placeholder } : {}),
   }));
 }
 
@@ -333,8 +333,8 @@ export function buildNodeCatalog(): NodeCatalog {
       desc: 'An LLM step. Needs a provider attached to its "model" port; tools attach to its "tools" port.',
       templates: AGENT_TEMPLATES.map((t) => ({
         id: t.id,
-        name: t.name,
-        desc: t.desc,
+        name: t.catalogName ?? t.name,
+        desc: t.catalogDesc ?? t.desc,
         kind: kindOf("agent", t.id),
         ...(AGENT_NOTES[t.id] ? { note: AGENT_NOTES[t.id] } : {}),
         fields: [
@@ -379,7 +379,7 @@ export function buildNodeCatalog(): NodeCatalog {
         const oauth = CONNECTOR_CONFIG_FIELDS[t.id]?.oauthProvider;
         return {
           id: t.id,
-          name: t.name,
+          name: t.catalogName ?? t.name,
           desc: t.desc,
           kind: kindOf("action", t.id),
           ...(ACTION_NOTES[t.id] ? { note: ACTION_NOTES[t.id] } : {}),

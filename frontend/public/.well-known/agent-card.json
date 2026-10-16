@@ -1,6 +1,6 @@
 {
   "name": "AgentMesh",
-  "description": "Design, deploy, and monitor AI agent workflows. Agents call tools through function calling and pay for x402-gated endpoints on Algorand mid-run, without a human in the loop.",
+  "description": "Build AI workflows on a visual canvas, connect models and API tools, and monitor run logs and costs.",
   "url": "https://www.agent-mesh.app",
   "iconUrl": "https://www.agent-mesh.app/logo.png",
   "documentationUrl": "https://www.agent-mesh.app/llms.txt",
@@ -12,18 +12,14 @@
     {
       "id": "x402-relay",
       "name": "x402 relay",
-      "description": "Pays a real x402-gated endpoint on the caller's behalf. Append ?target=<url> to route payment to that endpoint; the relay settles the inbound leg, pays the target, and forwards the target's own response unmodified. A bare request returns the relay's own self-listing challenge.",
-      "tags": ["x402", "payments", "algorand", "proxy"],
+      "description": "Route a request to an x402 API using ?target=<url>. The relay handles payment and returns the target response. A request without a target returns the relay payment requirements.",
+      "tags": ["x402", "payments", "proxy"],
       "inputModes": ["application/json"],
       "outputModes": ["application/json"]
     }
   ],
   "x402": {
     "endpoint": "https://www.agent-mesh.app/api/x402/relay",
-    "method": "GET",
-    "network": "algorand-mainnet",
-    "asset": "31566704",
-    "assetSymbol": "USDC",
-    "price": "0.01"
+    "method": "GET"
   }
 }

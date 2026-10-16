@@ -1,0 +1,57 @@
+/* ── shadcn/ui theme ───────────────────────────────────────────────────────
+   The components in components/ui/*.tsx (button, dropdown-menu, popover, ...)
+   are shadcn/ui's, styled with its semantic Tailwind colours: bg-popover,
+   text-muted-foreground, border-input. This file points those names at the
+   app's own tokens (globals.css :root), so a shadcn component and a
+   hand-styled surface draw from one palette.
+
+   Only Tailwind theme names are defined here -- no :root variable is
+   redefined. Two of shadcn's usual variable names already exist in this app
+   and one of them means something else: our --accent is the brand violet,
+   where shadcn's --accent is the quiet hover wash. Mapping at the theme level
+   keeps both meanings intact.
+
+   Nothing here styles an element on its own: a theme colour only takes effect
+   through a utility class, and the base rule below is scoped to [data-slot],
+   the attribute every shadcn component (and nothing else) carries. The rest
+   of the app, the native shell included, renders exactly as before. */
+
+/* The app is dark-only, so shadcn's dark: styles always apply. `:where` keeps
+   the selector's specificity unchanged. */
+@custom-variant dark (&:where(html *));
+
+@theme inline {
+  --color-background: var(--bg);
+  --color-foreground: var(--fg);
+  --color-card: var(--bg-elev-1);
+  --color-card-foreground: var(--fg);
+  --color-popover: var(--bg-elev-2);
+  --color-popover-foreground: var(--fg);
+  --color-primary: var(--accent);
+  --color-primary-foreground: var(--accent-fg);
+  --color-secondary: var(--bg-elev-3);
+  --color-secondary-foreground: var(--fg);
+  --color-muted: var(--bg-elev-1);
+  --color-muted-foreground: var(--fg-muted);
+  --color-accent: var(--bg-elev-3);
+  --color-accent-foreground: var(--fg);
+  --color-destructive: var(--danger);
+  --color-border: var(--border);
+  --color-input: var(--border-strong);
+  --color-ring: var(--accent);
+
+  --radius-sm: 6px;
+  --radius-md: var(--r-2);
+  --radius-lg: 10px;
+  --radius-xl: var(--r-3);
+}
+
+/* shadcn's stylesheet sets this on `*`; scoped to its components here so no
+   existing element's default border or outline colour changes. */
+@layer base {
+  [data-slot],
+  [data-slot] * {
+    border-color: var(--color-border);
+    outline-color: color-mix(in oklab, var(--color-ring) 50%, transparent);
+  }
+}

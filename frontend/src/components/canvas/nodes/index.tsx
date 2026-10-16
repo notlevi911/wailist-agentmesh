@@ -458,7 +458,7 @@ function AgentNode({
               whiteSpace: "nowrap",
             }}
           >
-            {node.name}
+            {node.name === tpl.catalogName ? tpl.name : node.name ?? tpl.name}
           </div>
         </div>
         {deployed && (
@@ -923,7 +923,11 @@ function ActionNode({
         iconBg="var(--bg-elev-3)"
         iconColor="var(--fg)"
         kicker="action"
-        title={node.name ?? tpl?.name ?? "Action"}
+        title={
+          tpl && "catalogName" in tpl && node.name === tpl.catalogName
+            ? tpl.name
+            : node.name ?? tpl?.name ?? "Action"
+        }
         sub={node.sub ?? tpl?.desc}
       />
       <SidePort

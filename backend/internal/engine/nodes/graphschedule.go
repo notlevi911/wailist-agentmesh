@@ -7,21 +7,9 @@ import (
 	"time"
 )
 
-// The builder's set_schedule tool.
-//
-// A timetable is a workflow-level setting, not a node, and until now the
-// builder could only tell the user to go and set one. "Every morning at 9"
-// is the single most common thing a workflow is asked to do, so a build for
-// it ended with a manual trigger and a chore -- and the chore carried a trap:
-// the schedule is stored in UTC, so "9 am" typed as 0 9 * * * fires at 2:30
-// pm in India.
-//
-// The model names the time the way the user said it, in the user's own
-// timezone, and the server does the conversion. The conversion mirrors the
-// Workflows page's cadenceToCron (frontend/src/lib/cronCadence.ts) exactly --
-// the same three cadences, the same anchoring on today's date -- so a
-// schedule the builder set is one the Schedule picker can read back and
-// edit. Keep the two in step.
+// The builder accepts local times and stores fixed UTC schedules. Weekly
+// requests here use one weekday; the Workflows editor also supports lists.
+// Keep the monthly day guard aligned with frontend/src/lib/cronCadence.ts.
 
 // builderSchedule is what set_schedule decided during one build.
 type builderSchedule struct {
@@ -112,7 +100,7 @@ func (s *builderSchedule) set(args map[string]any, now time.Time) (string, error
 		return "schedule removed: the workflow will only run when someone starts it. Tell the user.", nil
 	}
 	if cadence != "daily" && cadence != "weekly" && cadence != "monthly" {
-		return "", fmt.Errorf("set_schedule: cadence must be daily, weekly, monthly or off, not %q -- for anything else (hourly, weekdays only, several times a day) tell the user to set it on the Workflows page", cadence)
+		return "", fmt.Errorf("set_schedule: cadence must be daily, weekly with one weekday, monthly with one date, or off, not %q. Other cadences are not supported by this tool. Ask the user to choose a supported cadence before changing an existing schedule", cadence)
 	}
 	hour, minute, ok := parseClock(argString(args, "time"))
 	if !ok {
@@ -160,10 +148,15 @@ func (s *builderSchedule) set(args map[string]any, now time.Time) (string, error
 
 	expr := cadenceCron(cadence, hour, minute, dow, dom, s.loc, now)
 	s.cron = &expr
-	return fmt.Sprintf("schedule set: %s at %02d:%02d %s (saved as the UTC cron %q). "+
-		"It only fires once the workflow is deployed, so tell the user to press Deploy, and tell them the time and timezone above so they can check it. "+
+	// The UTC cron is deliberately not in the message: whatever the model is
+	// handed, it tends to repeat, and a cron expression means nothing to the
+	// person reading the reply.
+	clock := time.Date(2000, time.January, 1, hour, minute, 0, 0, time.UTC).Format("3:04 PM")
+	return fmt.Sprintf("schedule set: %s at %s (%s). "+
+		"It only fires once the workflow is deployed, so tell the user to press Deploy. "+
+		"Tell them this schedule and timezone so they can check it. "+
 		"The workflow still starts from its manual trigger -- do not add another trigger.",
-		when, hour, minute, zoneName(s.loc), expr), nil
+		when, clock, zoneName(s.loc)), nil
 }
 
 func zoneName(loc *time.Location) string {

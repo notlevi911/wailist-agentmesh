@@ -103,7 +103,7 @@ export function BillingPhonePage(p: BillingPhoneProps) {
           <span className="bilp-stat__label">Balance</span>
           <span className="bilp-stat__row">
             <span className="bilp-stat__value">
-              {p.balanceKnown ? fmtUSD(p.balanceUSD) : "—"}
+              {p.balanceKnown ? fmtUSD(p.balanceUSD) : "-"}
             </span>
             <span className="bilp-pill">
               <span className="bilp-pill__dot" aria-hidden />
@@ -118,7 +118,7 @@ export function BillingPhonePage(p: BillingPhoneProps) {
         <div className="bilp-stat">
           <span className="bilp-stat__label">Spent · 30d</span>
           <span className="bilp-stat__value">
-            {p.spent30dUSD === null ? "—" : fmtUSD(p.spent30dUSD)}
+            {p.spent30dUSD === null ? "-" : fmtUSD(p.spent30dUSD)}
           </span>
         </div>
       </section>
@@ -188,7 +188,7 @@ export function BillingPhonePage(p: BillingPhoneProps) {
               onChange={(e) => p.onCustomChange(e.target.value)}
             />
             <span className="bilp-amount__usd">
-              {credits === null ? "≈ —" : `≈ ${fmtUSD(credits)}`}
+              {credits === null ? "≈ -" : `≈ ${fmtUSD(credits)}`}
             </span>
           </div>
 

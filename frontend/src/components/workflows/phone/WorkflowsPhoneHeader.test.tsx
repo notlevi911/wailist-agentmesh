@@ -52,11 +52,11 @@ describe("WorkflowsPhoneHeader", () => {
   it("shows a dash, not $0.00, until the balance is known", () => {
     state.credits = { balanceUSD: 0, balanceKnown: false };
     const { container } = renderHeader();
-    expect(container.textContent).toContain("—");
+    expect(container.textContent).toContain("-");
     expect(container.textContent).not.toContain("$0.00");
     // The spoken name still starts with what is on screen.
     expect(
-      screen.getByLabelText("Credit —, balance not loaded yet, add credits"),
+      screen.getByLabelText("Credit -, balance not loaded yet, add credits"),
     ).toBeTruthy();
   });
 

@@ -59,10 +59,46 @@ func TestSetScheduleConvertsLocalTimeToUTC(t *testing.T) {
 // own terms, and that nothing fires until the workflow is deployed.
 func TestSetScheduleTellsTheModelWhatItSet(t *testing.T) {
 	_, msg := setSchedule(t, "Asia/Kolkata", map[string]any{"cadence": "daily", "time": "09:00"})
-	for _, want := range []string{"every day", "09:00", "Asia/Kolkata", "Deploy"} {
+	for _, want := range []string{"every day", "9:00 AM", "Asia/Kolkata", "Deploy"} {
 		if !strings.Contains(msg, want) {
 			t.Errorf("message %q is missing %q", msg, want)
 		}
+	}
+}
+
+// People read schedules in words. The cron is only what gets stored, so the
+// model is never handed one to repeat in its reply.
+func TestSetScheduleKeepsTheCronFromTheModel(t *testing.T) {
+	for _, tc := range []struct {
+		zone, summary string
+		args          map[string]any
+	}{
+		{"UTC", "every day at 9:00 AM (UTC)", map[string]any{"cadence": "daily", "time": "09:00"}},
+		{"America/New_York", "every Friday at 8:30 PM (America/New_York)", map[string]any{"cadence": "weekly", "time": "20:30", "day": "friday"}},
+		{"Europe/Berlin", "on day 15 of every month at 1:30 PM (Europe/Berlin)", map[string]any{"cadence": "monthly", "time": "13:30", "dayOfMonth": 15.0}},
+	} {
+		s, msg := setSchedule(t, tc.zone, tc.args)
+		if s.cron == nil || *s.cron == "" {
+			t.Fatalf("%v: no schedule was set", tc.args)
+		}
+		if strings.Contains(msg, *s.cron) || strings.Contains(strings.ToLower(msg), "cron \"") {
+			t.Errorf("%v: message exposes stored cron %q: %s", tc.args, *s.cron, msg)
+		}
+		if !strings.Contains(msg, tc.summary) || strings.Contains(msg, "Asia/Kolkata") || strings.Contains(msg, "Monday") {
+			t.Errorf("%v: message does not describe only the actual cadence and zone: %s", tc.args, msg)
+		}
+	}
+}
+
+func TestUnsupportedScheduleDoesNotRedirectToUnsupportedEditor(t *testing.T) {
+	s, _ := setSchedule(t, "UTC", map[string]any{"cadence": "daily", "time": "09:00"})
+	previous := *s.cron
+	_, err := s.set(map[string]any{"cadence": "hourly"}, schedNow)
+	if err == nil || strings.Contains(err.Error(), "set it on the Workflows page") {
+		t.Fatalf("unsupported cadence must not redirect to an incapable editor: %v", err)
+	}
+	if *s.cron != previous {
+		t.Fatal("unsupported cadence changed the existing schedule")
 	}
 }
 

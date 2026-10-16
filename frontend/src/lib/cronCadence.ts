@@ -1,14 +1,5 @@
-// Converts between a user-facing schedule ("every day/week/month at a local
-// time") and the standard 5-field cron expression the backend's SetSchedule
-// handler parses in UTC (cron.ParseStandard: minute hour day-of-month month
-// day-of-week; SetSchedule computes next := sched.Next(time.Now().UTC())).
-//
-// Both directions build a real Date anchored on the chosen wall-clock
-// values and read it back through the OTHER timezone's accessors (local
-// Date methods vs. getUTC* methods) rather than doing manual offset
-// arithmetic -- Date already does correct calendar math (month/year
-// rollover, DST) for whatever moment that represents, so there's nothing
-// to get wrong by hand.
+// The backend stores fixed UTC cron times. Weekly selections share the
+// current offset, so a later clock change can move their local run time.
 
 export type Cadence = "daily" | "weekly" | "monthly";
 
@@ -16,8 +7,10 @@ export interface CadenceValue {
   /** Local time-of-day, "HH:MM" (24h). */
   time: string;
   cadence: Cadence;
-  /** 0 (Sun)-6 (Sat), local day-of-week. Read only when cadence === "weekly". */
+  /** 0 (Sun)-6 (Sat), local day-of-week, for a single weekly day. */
   dayOfWeek?: number;
+  /** 0 (Sun)-6 (Sat), local days-of-week for a multi-day weekly cadence. */
+  daysOfWeek?: number[];
   /** 1-28, local day-of-month. Read only when cadence === "monthly". */
   dayOfMonth?: number;
 }
@@ -26,6 +19,9 @@ export function cadenceToCron(
   value: CadenceValue,
   now: Date = new Date(),
 ): string {
+  if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(value.time)) {
+    throw new RangeError("Choose a valid time.");
+  }
   const [hStr, mStr] = value.time.split(":");
   const localHour = Number(hStr);
   const localMinute = Number(mStr);
@@ -39,11 +35,18 @@ export function cadenceToCron(
     0,
     0,
   );
-  if (value.cadence === "weekly" && value.dayOfWeek !== undefined) {
-    local.setDate(
-      local.getDate() + ((value.dayOfWeek - local.getDay() + 7) % 7),
-    );
-  } else if (value.cadence === "monthly" && value.dayOfMonth !== undefined) {
+  if (value.cadence === "weekly") {
+    // A stored cron has one fixed UTC time. Use one offset for every day,
+    // including weeks that straddle a clock change.
+    const utc = localHour * 60 + localMinute + now.getTimezoneOffset();
+    const shift = Math.floor(utc / 1440);
+    const minutes = (utc + 1440) % 1440;
+    const days = selectedDaysOfWeek(value)
+      .map((day) => (day + shift + 7) % 7)
+      .sort((a, b) => a - b);
+    return `${minutes % 60} ${Math.floor(minutes / 60)} * * ${days.join(",")}`;
+  }
+  if (value.cadence === "monthly" && value.dayOfMonth !== undefined) {
     local = new Date(
       now.getFullYear(),
       now.getMonth(),
@@ -61,9 +64,6 @@ export function cadenceToCron(
   if (value.cadence === "daily") {
     return `${minute} ${hour} * * *`;
   }
-  if (value.cadence === "weekly") {
-    return `${minute} ${hour} * * ${local.getUTCDay()}`;
-  }
   // Monthly. A standard cron names a UTC day of the month, so the local day
   // has to be expressed as one: day 15 at 21:00 in New York is the 16th at
   // 02:00 UTC, every month. That only works when the UTC day exists in every
@@ -76,6 +76,20 @@ export function cadenceToCron(
   const dayOfMonth = value.dayOfMonth ?? local.getDate();
   const utcDom = monthlyUtcDay(dayOfMonth, localHour, localMinute, now);
   return `${minute} ${hour} ${utcDom} * *`;
+}
+
+/** Return canonical local weekdays, keeping the legacy single-day field valid. */
+export function selectedDaysOfWeek(value: CadenceValue): number[] {
+  const raw =
+    value.daysOfWeek ??
+    (value.dayOfWeek === undefined ? [1] : [value.dayOfWeek]);
+  if (
+    !raw.length ||
+    raw.some((day) => !Number.isInteger(day) || day < 0 || day > 6)
+  ) {
+    throw new RangeError("Choose at least one valid weekday.");
+  }
+  return [...new Set(raw)].sort((a, b) => a - b);
 }
 
 /** Thrown when a local monthly time has no single UTC day-of-month. */
@@ -123,8 +137,8 @@ function monthlyUtcDay(
 // cronToCadence is cadenceToCron's inverse, for pre-filling the picker when
 // a schedule already exists. Only recognizes the exact shapes
 // cadenceToCron produces (month field always "*") -- returns null for
-// anything else (a schedule set by some other tool, or malformed), so the
-// caller falls back to its own defaults rather than guessing.
+// anything else. Callers must protect a custom schedule until the user
+// explicitly chooses to replace it.
 export function cronToCadence(
   cron: string,
   now: Date = new Date(),
@@ -135,8 +149,10 @@ export function cronToCadence(
   const utcMinute = Number(mStr);
   const utcHour = Number(hStr);
   if (
-    !Number.isInteger(utcMinute) ||
-    !Number.isInteger(utcHour) ||
+    !/^\d{1,2}$/.test(mStr) ||
+    utcMinute > 59 ||
+    !/^\d{1,2}$/.test(hStr) ||
+    utcHour > 23 ||
     monStr !== "*"
   ) {
     return null;
@@ -155,30 +171,31 @@ export function cronToCadence(
     return { cadence: "daily", time: toLocalTimeString(instant) };
   }
   if (domStr === "*" && dowStr !== "*") {
-    const utcDow = Number(dowStr);
-    if (!Number.isInteger(utcDow) || utcDow < 0 || utcDow > 6) return null;
-    const base = new Date(
-      Date.UTC(
-        now.getUTCFullYear(),
-        now.getUTCMonth(),
-        now.getUTCDate(),
-        utcHour,
-        utcMinute,
-      ),
-    );
-    // Nearest UTC date (today or the next 6 days) that falls on utcDow --
-    // any real date on that UTC weekday converts back to the same local
-    // weekday, "nearest" is only to pick a concrete instant to convert.
-    base.setUTCDate(base.getUTCDate() + ((utcDow - base.getUTCDay() + 7) % 7));
-    return {
-      cadence: "weekly",
-      time: toLocalTimeString(base),
-      dayOfWeek: base.getDay(),
-    };
+    const utcDays = parseExactDaysOfWeek(dowStr);
+    if (!utcDays) return null;
+    const local = utcHour * 60 + utcMinute - now.getTimezoneOffset();
+    const shift = Math.floor(local / 1440);
+    const minutes = (local + 1440) % 1440;
+    const time = `${String(Math.floor(minutes / 60)).padStart(2, "0")}:${String(minutes % 60).padStart(2, "0")}`;
+    const localDays = utcDays
+      .map((day) => (day + shift + 7) % 7)
+      .sort((a, b) => a - b);
+    return localDays.length === 1
+      ? {
+          cadence: "weekly",
+          time,
+          dayOfWeek: localDays[0],
+        }
+      : {
+          cadence: "weekly",
+          time,
+          daysOfWeek: localDays,
+        };
   }
   if (domStr !== "*" && dowStr === "*") {
     const utcDom = Number(domStr);
-    if (!Number.isInteger(utcDom) || utcDom < 1 || utcDom > 31) return null;
+    // Reject unsupported days before Date normalizes them into another month.
+    if (!/^\d{1,2}$/.test(domStr) || utcDom < 1 || utcDom > 28) return null;
     const base = new Date(
       Date.UTC(
         now.getUTCFullYear(),
@@ -208,4 +225,19 @@ export function cronToCadence(
 
 function toLocalTimeString(d: Date): string {
   return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+}
+
+function parseExactDaysOfWeek(field: string): number[] | null {
+  const parts = field.split(",");
+  if (parts.length === 0 || parts.some((part) => !/^\d+$/.test(part))) {
+    return null;
+  }
+  const days = parts.map(Number);
+  if (
+    days.some((day) => day < 0 || day > 6) ||
+    days.some((day, index) => index > 0 && day <= days[index - 1])
+  ) {
+    return null;
+  }
+  return days;
 }

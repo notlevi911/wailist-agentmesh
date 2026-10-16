@@ -153,7 +153,7 @@ describe("WorkflowSummary", () => {
     render(<WorkflowSummary workflowId="wf-1" />);
     expect(
       await screen.findByText(
-        "Not deployed yet — finish and deploy it in the AgentMesh desktop app",
+        "Not deployed yet: finish and deploy it in the AgentMesh desktop app",
       ),
     ).toBeTruthy();
   });
@@ -163,7 +163,7 @@ describe("WorkflowSummary", () => {
     render(<WorkflowSummary workflowId="wf-1" />);
     expect(
       await screen.findByText(
-        "Paused — resume it in the AgentMesh desktop app",
+        "Paused: resume it in the AgentMesh desktop app",
       ),
     ).toBeTruthy();
     expect(screen.getByText("Paused")).toBeTruthy();
@@ -407,8 +407,8 @@ describe("WorkflowSummary", () => {
     const fact = (label: string) =>
       screen.getByText(label).nextElementSibling?.textContent;
 
-    expect(fact("Runs · 30 days")).toBe("—");
-    expect(fact("Spent · 30 days")).toBe("—");
+    expect(fact("Runs · 30 days")).toBe("-");
+    expect(fact("Spent · 30 days")).toBe("-");
     // totalRuns has its own nullable field and was answered, so it stands.
     expect(fact("Total runs")).toBe("7");
   });
@@ -423,7 +423,7 @@ describe("WorkflowSummary", () => {
     expect(await fact("Total runs")).toBe((1842).toLocaleString());
     expect(await fact("Runs · 30 days")).toBe("38");
     expect(await fact("Spent · 30 days")).toBe("$1.48");
-    expect(await fact("Next run")).toBe("—");
+    expect(await fact("Next run")).toBe("-");
   });
 
   it("lists its agents with the model and tools each uses", async () => {

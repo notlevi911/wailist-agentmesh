@@ -205,7 +205,7 @@ export function Topbar() {
                             color: "var(--fg)",
                           }}
                         >
-                          {user?.name?.trim() || "—"}
+                          {user?.name?.trim() || "-"}
                         </div>
                         <div
                           style={{
@@ -216,7 +216,7 @@ export function Topbar() {
                             whiteSpace: "nowrap",
                           }}
                         >
-                          {user?.email ?? "—"}
+                          {user?.email ?? "-"}
                         </div>
                       </div>
                     </div>

@@ -331,7 +331,7 @@ function PlanOption({
             color: "var(--fg-dim)",
           }}
         >
-          Same price as the CLI hour — the agent is included, not an extra.
+          Agent access is included in the hourly price.
         </div>
       )}
     </button>
@@ -584,9 +584,8 @@ export function HelixboxConsolePage() {
               lineHeight: 1.6,
             }}
           >
-            HelixBox puts your development machine on your phone — files, logs,
-            Git and a terminal. Buy a session here and you get a token to sign
-            in with. No subscription, and it stops when the time runs out.
+            Access files, logs, Git, and a terminal from your phone. Buy a
+            HelixBox session and use its token to sign in.
           </p>
 
           {loadError && (
@@ -676,7 +675,7 @@ export function HelixboxConsolePage() {
                     <span>
                       Keep the CLI running and the HelixBox app open on this
                       session. The app checks for new time every couple of
-                      seconds, so it unlocks on its own once you buy — there is
+                      seconds, so it unlocks on its own once you buy: there is
                       nothing to paste back into it.
                     </span>
                   </div>
@@ -835,9 +834,8 @@ export function HelixboxConsolePage() {
                         lineHeight: 1.55,
                       }}
                     >
-                      HelixBox answered without asking for payment, so this was
-                      free. That is unusual — check the session works before you
-                      rely on it.
+                      HelixBox returned a response without requesting payment. Check
+                      that the session works before using it.
                     </div>
                   )}
 
@@ -884,7 +882,7 @@ export function HelixboxConsolePage() {
                           lineHeight: 1.55,
                         }}
                       >
-                        Your HelixBox CLI picks this up on its own — nothing to
+                        Your HelixBox CLI picks this up on its own: nothing to
                         paste back into it. The receipt is kept in this browser
                         under Your sessions below.
                       </div>
@@ -906,8 +904,8 @@ export function HelixboxConsolePage() {
                       }}
                     >
                       The payment went through, but HelixBox did not say how
-                      long your session is now paid for. The full reply is below
-                      — keep the transaction link as your receipt and contact
+                      long your session is now paid for. The full reply is below.
+                      Keep the transaction link as your receipt and contact
                       HelixBox with it.
                     </div>
                   )}
