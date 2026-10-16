@@ -172,6 +172,6 @@ describe("WorkflowsPhoneList", () => {
     const summary = screen.getByLabelText("2 workflows, spend not loaded");
     expect(summary.textContent).toContain("2 total");
     expect(summary.textContent).not.toMatch(/\$0/);
-    expect(summary.textContent).toMatch(/—\s*spent/);
+    expect(summary.textContent).toMatch(/-\s*spent/);
   });
 });

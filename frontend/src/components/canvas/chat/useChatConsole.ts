@@ -212,7 +212,7 @@ export function useChatConsole({
             res.reply ??
             (res.ok
               ? "Done."
-              : "Could not update the workflow — see the notification for why, then try again."),
+              : "Could not update the workflow: see the notification for why, then try again."),
           isError: !res.ok,
         });
         // Only now: leaving build mode swaps the transcript under this hook,
@@ -225,7 +225,7 @@ export function useChatConsole({
       const ok = (await onSendMessage?.(text)) ?? false;
       if (!ok) {
         completeTurnById(turnId, {
-          text: "Could not start this run — see the notification for why, then try again.",
+          text: "Could not start this run: see the notification for why, then try again.",
           isError: true,
         });
       }

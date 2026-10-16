@@ -845,7 +845,7 @@ function UsageBody({
                     whiteSpace: "nowrap",
                   }}
                 >
-                  {s.workflowId || "—"}
+                  {s.workflowId || "-"}
                 </span>
                 <span style={{ color: "var(--fg)", textAlign: "right" }}>
                   {s.amountAlgo.toFixed(6)}{" "}
@@ -900,8 +900,8 @@ function UsageBody({
           letterSpacing: "0.02em",
         }}
       >
-        settled on Algorand testnet · figures update ~every run · LLM prices (*)
-        estimated from provider list rates at ~3:1 in:out tokens
+        Usage updates after each run. LLM prices (*) are estimated from provider
+        list rates using a 3:1 input-to-output token ratio.
       </p>
     </div>
   );

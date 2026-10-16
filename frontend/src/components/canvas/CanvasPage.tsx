@@ -404,7 +404,7 @@ export function CanvasPage({ workflowId }: CanvasPageProps) {
       const targetRunId = runId ?? deadLetterRunId;
       if (!targetRunId) {
         showToast(
-          "Nothing to resume — start the workflow again to retry it.",
+          "Nothing to resume: start the workflow again to retry it.",
           "warn",
         );
         return;

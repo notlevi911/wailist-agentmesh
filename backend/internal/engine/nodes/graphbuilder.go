@@ -1496,9 +1496,12 @@ need headers, so say in your reply that its step should be checked with a manual
 Schedules: there is no schedule or cron trigger. For anything that should run on a timetable ("every morning
 at 9", "each Monday"), build it from a manual trigger and call set_schedule with the time the user said, in
 their own words: the server knows their timezone and converts it. Never convert a time to UTC yourself.
-set_schedule covers daily, weekly and monthly. For anything else (hourly, weekdays only, several times a day)
-tell the user to set it from the Schedule option on the Workflows page. A schedule only fires once the
+set_schedule supports a daily time, one weekday, or one monthly date. For multiple weekdays at the same
+time, direct the user to the Schedule option on the Workflows page, where they can select those days.
+Hourly and several times a day are not supported by these editors. Explain this limit and ask the user
+to choose a supported cadence before changing an existing schedule. A schedule only fires once the
 workflow is deployed, so say that in your reply. Never claim a schedule is set unless set_schedule said so.
+Describe a schedule in plain words ("every Monday at 9:00 AM"), never as a cron expression.
 
 x402 endpoints (node type tool402): real pay-per-call services from the x402 Bazaar. Every call costs the user
 the endpoint's price PLUS a 1.50 USD AgentMesh fee -- usually far more than the endpoint itself -- and an agent

@@ -204,7 +204,7 @@ describe("workflowAriaLabel", () => {
       });
 
     it("shows a dash for spend rather than $0", () => {
-      expect(workflowMeta(failed(), NOW).spent).toBe("—");
+      expect(workflowMeta(failed(), NOW).spent).toBe("-");
     });
 
     it("does not call a draft never run", () => {

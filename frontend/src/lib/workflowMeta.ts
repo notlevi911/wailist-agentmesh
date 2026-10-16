@@ -21,7 +21,7 @@ export function totalSpend(list: Workflow[]): number {
 }
 
 /** The dash this screen shows wherever a figure is not known. */
-export const UNKNOWN = "—";
+export const UNKNOWN = "-";
 
 /**
  * Whether a workflow's run and spend figures mean anything.
@@ -76,9 +76,9 @@ function state(
   }
   const until = wf.scheduleNextRunAt
     ? formatUntil(wf.scheduleNextRunAt, now)
-    : "—";
+    : "-";
   // formatUntil says "—" for a time it cannot read.
-  if (until === "—") {
+  if (until === "-") {
     // A workflow on a schedule is not "no run queued" just because no next
     // time reached this screen: it still runs every weekday, whether or not
     // the list knows when. Saying the schedule is both truer and more useful.

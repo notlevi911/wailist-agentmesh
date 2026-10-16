@@ -86,7 +86,7 @@ describe("BillingPhonePage", () => {
   it("shows a dash for spend until it is known", () => {
     const { container } = renderPage({ spent30dUSD: null });
     const stat = screen.getByText("Spent · 30d").parentElement!;
-    expect(stat.textContent).toContain("—");
+    expect(stat.textContent).toContain("-");
     expect(container.textContent).not.toContain("$0.00");
   });
 
@@ -100,7 +100,7 @@ describe("BillingPhonePage", () => {
 
   it("shows a dash, not $0.00, until the balance is known", () => {
     const { container } = renderPage({ balanceKnown: false, balanceUSD: 0 });
-    expect(screen.getByText("—")).toBeTruthy();
+    expect(screen.getByText("-")).toBeTruthy();
     expect(container.textContent).not.toContain("$0.00");
   });
 });
@@ -122,7 +122,7 @@ describe("the quote", () => {
 
   it("quotes nothing at all until the rate arrives", () => {
     const { container } = renderPage({ usdPerINR: 0 });
-    expect(container.textContent).toContain("≈ —");
+    expect(container.textContent).toContain("≈ -");
     expect(container.textContent).not.toMatch(/≈ \$/);
   });
 
@@ -196,7 +196,7 @@ describe("the coupon", () => {
       couponCode: "WELCOME",
       onApplyCoupon,
       couponState: "success",
-      couponMessage: "Coupon applied — $5.00 added to your balance.",
+      couponMessage: "Coupon applied: $5.00 added to your balance.",
     });
     fireEvent.click(screen.getByRole("button", { name: /Have a coupon/ }));
     fireEvent.click(screen.getByRole("button", { name: "Apply" }));

@@ -492,7 +492,7 @@ function DeadLetterRow({
             cursor: "pointer",
           }}
         >
-          {confirming ? "Confirm — completed steps won't re-run" : "Resume"}
+          {confirming ? "Confirm: completed steps won't re-run" : "Resume"}
         </button>
       </div>
       <div style={{ color: "var(--fg-dim)", fontSize: "var(--t-0)", paddingTop: 2 }}>
@@ -584,7 +584,7 @@ function OutputCell({ output }: { output: unknown }) {
         </span>
       )}
       {text === "" ? (
-        !payment && <span style={{ color: "var(--fg-dim)" }}>—</span>
+        !payment && <span style={{ color: "var(--fg-dim)" }}>-</span>
       ) : collapsible ? (
         <>
           <button

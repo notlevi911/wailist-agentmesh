@@ -137,7 +137,7 @@ describe("formatDistance", () => {
   });
 
   it("does not render a reading it has not got", () => {
-    expect(formatDistance(Number.NaN)).toBe("—");
+    expect(formatDistance(Number.NaN)).toBe("-");
   });
 });
 

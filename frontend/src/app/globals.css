@@ -1,5 +1,8 @@
 @import "tailwindcss";
+@import "tw-animate-css";
 @import "./responsive.css";
+/* The app has one dark theme; this import makes every dark: utility unconditional. */
+@import "./shadcn.css";
 
 /* ── Design tokens ────────────────────────────────────────────────────── */
 :root {

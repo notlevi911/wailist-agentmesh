@@ -498,7 +498,7 @@ export const workflows = {
     const current = await workflows.get(id);
     return {
       reply:
-        "Mock build response — connect a real backend to build workflows from chat.",
+        "Mock build response: connect a real backend to build workflows from chat.",
       workflow: current,
     };
   },
@@ -1045,7 +1045,7 @@ export const runs = {
           output: {
             message:
               "It's 14.2°C in San Francisco right now and partly cloudy, with " +
-              "winds around 18 km/h. Mild, but the wind makes it feel cooler — " +
+              "winds around 18 km/h. Mild, but the wind makes it feel cooler: " +
               "worth a light jacket if you're heading out.",
             x402Payments: [{ txId: mockTxId, amount: "0.065" }],
           },

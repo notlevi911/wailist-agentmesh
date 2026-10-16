@@ -213,7 +213,7 @@ export default function BillingPage() {
       await refreshBalance();
       setCouponState("success");
       setCouponMessage(
-        `Coupon applied — ${fmtUSD(creditedUSD)} added to your balance.`,
+        `Coupon applied: ${fmtUSD(creditedUSD)} added to your balance.`,
       );
       setCouponCode("");
     } catch (e) {
@@ -442,7 +442,7 @@ export default function BillingPage() {
                         fontVariantNumeric: "tabular-nums",
                       }}
                     >
-                      {balanceKnown ? fmtUSD(balanceUSD) : "—"}
+                      {balanceKnown ? fmtUSD(balanceUSD) : "-"}
                     </div>
                   </div>
                   <span
@@ -557,7 +557,7 @@ export default function BillingPage() {
                         >
                           {usdPerINR > 0
                             ? `≈ ${fmtUSD(creditsForTopup(inr, usdPerINR))}`
-                            : "≈ —"}
+                            : "≈ -"}
                         </span>
                       </button>
                     );
@@ -635,7 +635,7 @@ export default function BillingPage() {
                           whiteSpace: "nowrap",
                         }}
                       >
-                        {credits === null ? "≈ —" : `≈ ${fmtUSD(credits)}`}
+                        {credits === null ? "≈ -" : `≈ ${fmtUSD(credits)}`}
                         <span className="bill-custom-unit"> credits</span>
                       </span>
                     )}

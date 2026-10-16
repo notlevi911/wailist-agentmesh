@@ -80,7 +80,7 @@ describe("UsagePhonePage", () => {
     renderPage();
     expect(
       screen.getByRole("link", { name: /Credits left/ }).textContent,
-    ).toContain("—");
+    ).toContain("-");
   });
 
   it.each([

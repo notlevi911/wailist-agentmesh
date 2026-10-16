@@ -75,7 +75,7 @@ export function ProviderGroupCard({
           className="bz-row__meta"
           title={
             partial
-              ? "Based on results loaded so far — may change as you scroll"
+              ? "Based on results loaded so far: may change as you scroll"
               : undefined
           }
         >

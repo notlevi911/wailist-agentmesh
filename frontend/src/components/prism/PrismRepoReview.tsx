@@ -200,7 +200,7 @@ export function PrismRepoReview({
             lineHeight: 1.5,
           }}
         >
-          Public GitHub repositories only — Prism opens each file itself, so it
+          Public GitHub repositories only: Prism opens each file itself, so it
           can&rsquo;t sign in. Listing is free; you pick what to review before
           anything is charged.
         </div>
@@ -271,8 +271,8 @@ export function PrismRepoReview({
                   lineHeight: 1.55,
                 }}
               >
-                Nothing here is source code Prism can review — it looks like
-                docs, config or build output. Try a repository with code in it.
+                No supported source files found. Try a repository containing
+                source code.
               </div>
             )}
 
@@ -365,14 +365,14 @@ export function PrismRepoReview({
                 >
                   {skipped.slice(0, MAX_SKIPPED_SHOWN).map((f) => (
                     <div key={f.path}>
-                      {f.path} — {f.skip}
+                      {f.path} - {f.skip}
                     </div>
                   ))}
                   {skipped.length > MAX_SKIPPED_SHOWN && (
                     <div style={{ marginTop: 6, color: "var(--fg-muted)" }}>
                       …and {skipped.length - MAX_SKIPPED_SHOWN} more. These are
-                      lockfiles, build output and binaries — nothing you are
-                      being charged for.
+                      lockfiles, build output, and binaries. Skipped files are not
+                      charged.
                     </div>
                   )}
                 </div>
@@ -435,8 +435,8 @@ export function PrismRepoReview({
                 lineHeight: 1.55,
               }}
             >
-              Reviewing {selected.size} files, one at a time. This takes a while
-              — leave the page open.
+              Reviewing {selected.size} files, one at a time. Leave the page open
+              until the review finishes.
             </div>
           )}
         </>

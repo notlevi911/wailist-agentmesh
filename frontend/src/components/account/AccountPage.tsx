@@ -23,8 +23,8 @@ export function AccountPage() {
     void refreshBalance();
   }, [refreshBalance]);
 
-  const name = user?.name?.trim() || "—";
-  const email = user?.email ?? "—";
+  const name = user?.name?.trim() || "-";
+  const email = user?.email ?? "-";
   const orgName = user?.orgName?.trim() || "Personal workspace";
   const initial = (
     user?.name?.trim()?.[0] ??
@@ -77,7 +77,7 @@ export function AccountPage() {
               <Link href="/billing" className="account-row" style={row}>
                 <span>Credits</span>
                 <span style={rowValue}>
-                  {balanceKnown ? `$${balanceUSD.toFixed(2)}` : "—"}
+                  {balanceKnown ? `$${balanceUSD.toFixed(2)}` : "-"}
                   <Chevron />
                 </span>
               </Link>

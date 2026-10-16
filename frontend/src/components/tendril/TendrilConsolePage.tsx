@@ -46,7 +46,7 @@ function formatDuration(totalSeconds: number): string {
 // "expired".
 function formatRemaining(reservedUntilMs: number, now: number): string {
   const remainingMs = reservedUntilMs - now;
-  if (remainingMs <= 0) return "past reserved estimate — still billing live";
+  if (remainingMs <= 0) return "past reserved estimate: still billing live";
   return `${formatDuration(remainingMs / 1000)} left on the reservation`;
 }
 
@@ -324,7 +324,7 @@ export function TendrilConsolePage() {
               maxWidth: 520,
             }}
           >
-            A real Linux box, by the hour, paid from your AgentMesh wallet. Pick
+            Rent a Linux machine by the hour using your AgentMesh credits. Pick
             one below, get a terminal, release it when you&rsquo;re done.
           </p>
           <div
@@ -341,7 +341,7 @@ export function TendrilConsolePage() {
             <span style={{ color: MAGENTA, flexShrink: 0 }}>ⓘ</span>
             <span>
               Renting reserves the hours you pick up front. Release early and
-              you&rsquo;re billed only for the seconds you actually used — the
+              you&rsquo;re billed only for the seconds you actually used: the
               rest comes straight back to your Tendril credit.
             </span>
           </div>
@@ -381,7 +381,7 @@ export function TendrilConsolePage() {
                     marginTop: 4,
                   }}
                 >
-                  Separate from your AgentMesh credits — spendable only on
+                  Separate from your AgentMesh credits: spendable only on
                   machine time.
                 </div>
               </div>
@@ -945,7 +945,7 @@ export function TendrilConsolePage() {
             >
               <Dot color={GREEN} />
               <div style={{ fontSize: "var(--t-2)", color: "var(--fg)" }}>
-                Released after {formatDuration(releaseResult.usedSeconds)} —
+                Released after {formatDuration(releaseResult.usedSeconds)};
                 charged{" "}
                 <strong style={{ fontFamily: "var(--font-mono)" }}>
                   ${(releaseResult.charged / 1e6).toFixed(2)}

@@ -93,7 +93,7 @@ export function useSpeechRecognition(
       // only surface the ones the user needs to act on.
       if (event.error === "not-allowed" || event.error === "service-not-allowed") {
         setError(
-          "Microphone access was blocked — allow it in your browser's site settings.",
+          "Microphone access was blocked: allow it in your browser's site settings.",
         );
       } else if (event.error !== "no-speech" && event.error !== "aborted") {
         setError("Voice input failed. Try again.");
