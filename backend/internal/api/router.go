@@ -29,7 +29,6 @@ func NewRouter(d *handlers.Deps) http.Handler {
 	// it. The one-time code it takes is the credential, and it is worthless
 	// without the verifier that never left the device. See oauth_native.go.
 	r.Post("/auth/oauth/exchange", d.OAuthExchange)
-	r.Post("/waitlist", d.JoinWaitlist)
 	r.Post("/run/{workflowId}", d.PublicTrigger)
 	// Called by Cashfree's servers, not the browser — authenticated via HMAC signature
 	// (x-webhook-signature), not a session cookie, so it must sit outside the JWT group.

@@ -59,7 +59,6 @@ export const HANDHELD_TAB_ITEMS: readonly NavItem[] = [
 export const LANDING_NAV_ITEMS: readonly NavItem[] = [
   { label: "Overview", sectionId: "pillars" },
   { label: "How it works", sectionId: "flow" },
-  { label: "Waitlist", sectionId: "waitlist" },
 ];
 
 /**

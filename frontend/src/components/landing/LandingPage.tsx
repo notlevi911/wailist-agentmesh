@@ -2,7 +2,6 @@
 import { useRef, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { Logo, Tag, IconArrow } from "@/components/ui";
-import { waitlist } from "@/lib/api";
 import { AppNav } from "@/components/nav/AppNav";
 import { LANDING_NAV_ITEMS } from "@/lib/nav";
 import { siGithub } from "simple-icons";
@@ -149,7 +148,6 @@ export function LandingPage({ signedIn }: LandingPageProps) {
         />
         <LandingPillars />
         <LandingFlow />
-        <LandingWaitlist />
         <LandingFooter />
       </div>
     </div>
@@ -707,8 +705,8 @@ function LandingFlow() {
       style={{
         borderTop: "1px solid var(--border)",
         background: "rgba(4, 3, 12, 0.62)",
-        // Was a hardcoded "112px 32px" at every width -- the only section of
-        // the four not on the shared token, so on a phone it kept 112px of
+        // Was a hardcoded "112px 32px" at every width -- the only section
+        // not on the shared token, so on a phone it kept 112px of
         // desktop breathing room above and below while its neighbours dropped
         // to 72px.
         padding: "var(--lp-section-pad)",
@@ -838,168 +836,6 @@ function LandingFlow() {
               </div>
             </div>
           ))}
-        </div>
-      </div>
-    </section>
-  );
-}
-
-// ── Waitlist ──────────────────────────────────────────────────────────────
-function LandingWaitlist() {
-  const handleSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
-    e.preventDefault();
-    const data = new FormData(e.currentTarget);
-    const email = data.get("email") as string;
-    try {
-      await waitlist.join(email);
-      alert("Thanks! We'll be in touch.");
-    } catch {
-      alert("Thanks! We'll be in touch.");
-    }
-  };
-
-  return (
-    <section
-      id="waitlist"
-      style={{
-        borderTop: "1px solid var(--border)",
-        padding: "var(--lp-section-pad)",
-        position: "relative",
-        zIndex: 1,
-        background: "rgba(4, 3, 12, 0.55)",
-      }}
-    >
-      <div
-        className="in-view"
-        style={{ maxWidth: 540, margin: "0 auto", textAlign: "center" }}
-      >
-        <Tag>early access</Tag>
-        <h2
-          style={{
-            margin: "20px 0 14px",
-            // Was a flat 48px. Same floor/slope/ceiling shape as the hero.
-            fontSize: "clamp(28px, 6vw, 48px)",
-            fontWeight: 500,
-            letterSpacing: "-0.028em",
-            fontFamily: "var(--font-sans)",
-            lineHeight: 1.1,
-          }}
-        >
-          Join the waitlist.
-        </h2>
-        <p
-          style={{
-            color: "var(--fg-muted)",
-            fontSize: "var(--t-4)",
-            lineHeight: 1.6,
-            marginBottom: 40,
-          }}
-        >
-          Leave your email to receive access updates.
-        </p>
-        <div
-          style={{
-            padding: "32px 32px 28px",
-            background: "rgba(255,255,255,0.04)",
-            border: "1px solid rgba(255,255,255,0.09)",
-            borderRadius: "var(--r-4)",
-            backdropFilter: "blur(12px)",
-            boxShadow:
-              "0 0 60px rgba(167,140,250,0.07), inset 0 1px 0 rgba(255,255,255,0.06)",
-          }}
-        >
-          <form onSubmit={handleSubmit} className="lp-waitlist">
-            <input
-              name="email"
-              type="email"
-              required
-              placeholder="you@company.com"
-              style={{
-                height: 46,
-                flex: 1,
-                background: "rgba(255,255,255,0.05)",
-                border: "1px solid rgba(255,255,255,0.1)",
-                borderRadius: "var(--r-2)",
-                color: "var(--fg)",
-                fontFamily: "var(--font-sans)",
-                // 16px for the same reason as the sign-in fields: under 16,
-                // Safari on iOS zooms the page on focus and maximumScale is
-                // deliberately unset, so nothing else can refuse it.
-                fontSize: "var(--t-4)",
-                padding: "0 12px",
-                outline: "none",
-              }}
-            />
-            <button
-              type="submit"
-              style={{
-                height: 46,
-                padding: "0 22px",
-                fontSize: "var(--t-3)",
-                fontWeight: 600,
-                background: "var(--accent)",
-                color: "var(--accent-fg)",
-                border: "none",
-                borderRadius: "var(--r-2)",
-                cursor: "pointer",
-                fontFamily: "var(--font-sans)",
-                boxShadow: "0 0 20px var(--accent-glow)",
-                whiteSpace: "nowrap",
-              }}
-            >
-              Request access
-            </button>
-          </form>
-          <div
-            style={{
-              display: "flex",
-              justifyContent: "center",
-              gap: "var(--s-7)",
-              marginTop: 24,
-              paddingTop: 20,
-              borderTop: "1px solid rgba(255,255,255,0.06)",
-            }}
-          >
-            {[
-              { v: "Visual", l: "workflow builder" },
-              { v: "Live", l: "run logs" },
-            ].map((s, i) => (
-              <div key={i} style={{ textAlign: "center" }}>
-                <div
-                  style={{
-                    fontFamily: "var(--font-mono)",
-                    fontSize: "var(--t-4)",
-                    fontWeight: 600,
-                    color: "var(--accent)",
-                  }}
-                >
-                  {s.v}
-                </div>
-                <div
-                  style={{
-                    fontFamily: "var(--font-mono)",
-                    fontSize: "var(--t-0)",
-                    color: "var(--fg-dim)",
-                    marginTop: 3,
-                    textTransform: "uppercase",
-                    letterSpacing: "0.06em",
-                  }}
-                >
-                  {s.l}
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
-        <div
-          style={{
-            marginTop: 18,
-            fontFamily: "var(--font-mono)",
-            fontSize: "var(--t-1)",
-            color: "var(--fg-dim)",
-          }}
-        >
-          Access updates by email.
         </div>
       </div>
     </section>

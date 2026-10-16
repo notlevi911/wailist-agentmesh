@@ -1236,28 +1236,6 @@ export const oauth2 = {
   },
 };
 
-// -- Waitlist -------------------------------------------------------------
-export const waitlist = {
-  // TODO: POST /waitlist
-  join: async (email: string): Promise<void> => {
-    if (BASE) {
-      // Plain fetch, not apiFetch: this is the one genuinely public endpoint
-      // here, and it must not send credentials. A credentialed cross-origin
-      // request fails outright when CORS_ORIGIN is unset (the wildcard case,
-      // where the server cannot send Allow-Credentials), which would break the
-      // landing page's signup for a deployment where nothing else is wrong.
-      await fetch(`${BASE}/waitlist`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email }),
-      });
-      return;
-    }
-    void email;
-    await delay(600);
-  },
-};
-
 // -- Payments ---------------------------------------------------------------
 export const payments = {
   createCashfreeOrder: async (

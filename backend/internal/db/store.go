@@ -1232,15 +1232,6 @@ func (s *Store) GetOrCreateOAuthUser(ctx context.Context, email string) (models.
 	return u, err
 }
 
-// --- Waitlist methods ---
-
-func (s *Store) InsertWaitlistEmail(ctx context.Context, email string) error {
-	_, err := s.pool.Exec(ctx, `
-		INSERT INTO waitlist (email) VALUES ($1) ON CONFLICT (email) DO NOTHING
-	`, email)
-	return err
-}
-
 // --- Credit ledger methods ---
 
 func (s *Store) CreateCreditTransaction(ctx context.Context, userID, providerOrderID string, amountINRPaise int64, fxRate float64) (models.CreditTransaction, error) {
