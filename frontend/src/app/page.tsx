@@ -14,10 +14,9 @@ import { gateRoute, takePendingRoute } from "@/lib/nativeNav";
 //
 // In the installed app it was ALSO the marketing page, and that is wrong.
 // Someone who has already found, downloaded and installed this does not need to
-// be told what it is or invited to join a waitlist -- the landing page's own
-// menu offers "Overview", "How it works" and "Waitlist", none of which is a
-// thing to open an app onto. The WebView loads index.html at launch, so that is
-// simply what they got.
+// be told what it is -- the landing page's own menu offers "Overview" and "How
+// it works", neither of which is a thing to open an app onto. The WebView loads
+// index.html at launch, so that is simply what they got.
 //
 // There is no server-side gate to lean on either: middleware.ts protects
 // /workflows on the web, but it is Next SERVER middleware and the shell ships

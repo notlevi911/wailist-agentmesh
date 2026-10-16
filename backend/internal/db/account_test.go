@@ -46,7 +46,7 @@ var accountFixtureStatements = []string{
 	`INSERT INTO dead_letter_runs (run_id, node_id, error, attempt_count) VALUES ($1, 'node', 'error', 1)`,
 	`INSERT INTO x402_run_fundings (id, run_id, inbound_tx_id, amount_asset_micros) VALUES ($1::uuid, $1, $1, 1)`,
 	`INSERT INTO x402_relay_settlements (run_funding_id, target_url, amount_asset_micros) VALUES ($1::uuid, 'https://example.test', 1)`,
-	`INSERT INTO waitlist (email) VALUES (upper($1 || '@example.test'))`,
+	`INSERT INTO waitlist_archived (email) VALUES (upper($1 || '@example.test'))`,
 }
 
 var accountFixtureCounts = []string{
@@ -69,7 +69,7 @@ var accountFixtureCounts = []string{
 	`SELECT count(*) FROM dead_letter_runs WHERE run_id = $1`,
 	`SELECT count(*) FROM x402_run_fundings WHERE run_id = $1`,
 	`SELECT count(*) FROM x402_relay_settlements WHERE run_funding_id = $1::uuid`,
-	`SELECT count(*) FROM waitlist WHERE lower(email) = $1 || '@example.test'`,
+	`SELECT count(*) FROM waitlist_archived WHERE lower(email) = $1 || '@example.test'`,
 }
 
 func accountFixture(t *testing.T, s *Store) string {
@@ -81,7 +81,7 @@ func accountFixture(t *testing.T, s *Store) string {
 		}
 	}
 	t.Cleanup(func() {
-		if _, err := s.pool.Exec(context.Background(), `DELETE FROM waitlist WHERE lower(email) = $1 || '@example.test'`, id); err != nil {
+		if _, err := s.pool.Exec(context.Background(), `DELETE FROM waitlist_archived WHERE lower(email) = $1 || '@example.test'`, id); err != nil {
 			t.Error(err)
 		}
 		if _, err := s.pool.Exec(context.Background(), `DELETE FROM tendril_leases WHERE user_id = $1`, id); err != nil {

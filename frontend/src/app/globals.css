@@ -701,23 +701,6 @@ body {
 .lp-marquee {
   padding: 0 32px 40px;
 }
-
-/* The waitlist form. Side by side while there is room, stacked once there is
-   not: at 360px the row gave the email field about 150px, which is narrower
-   than the placeholder it has to show.
-
-   A class rather than the inline `display: flex` it replaces -- the row had to
-   stop being an inline style before any media query could reach it. */
-.lp-waitlist {
-  display: flex;
-  gap: var(--s-3);
-}
-@media (max-width: 520px) {
-  .lp-waitlist {
-    flex-direction: column;
-    align-items: stretch;
-  }
-}
 @media (max-width: 768px) {
   :root {
     --lp-steps-cols: repeat(2, 1fr);

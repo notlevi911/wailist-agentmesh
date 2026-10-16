@@ -50,7 +50,7 @@ func (s *Store) DeleteAccount(ctx context.Context, userID, passwordHash string) 
 	if _, err := tx.Exec(ctx, `DELETE FROM tendril_leases WHERE user_id = $1 AND status <> 'active'`, userID); err != nil {
 		return fmt.Errorf("delete machine lease history: %w", err)
 	}
-	if _, err := tx.Exec(ctx, `DELETE FROM waitlist WHERE lower(email) = lower($1)`, email); err != nil {
+	if _, err := tx.Exec(ctx, `DELETE FROM waitlist_archived WHERE lower(email) = lower($1)`, email); err != nil {
 		return fmt.Errorf("delete account waitlist entry: %w", err)
 	}
 	// Remaining owned records cascade; unrelated public settlement records have no owner.
