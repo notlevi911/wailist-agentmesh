@@ -2,13 +2,17 @@ package handlers
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"math"
+	"net/http/httptest"
 	"os"
 	"sync"
 	"testing"
 
 	"github.com/agentmesh/backend/internal/db"
+	"github.com/agentmesh/backend/internal/engine/nodes"
 	"github.com/agentmesh/backend/internal/models"
 	"github.com/google/uuid"
 )
@@ -211,4 +215,43 @@ func TestConsoleSpendLimitConcurrentBatch(t *testing.T) {
 		t.Fatalf("accepted=%d blocked=%d", accepted, blocked)
 	}
 	assertConsoleBalance(t, store, owner, 900_000)
+}
+
+func TestConsolePaymentRefusalClassification(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		err  error
+		code string
+		http int
+	}{
+		{"limit", errConsoleSpendLimit, "spending_limit", 402},
+		{"wrapped limit", &nodes.ErrBalanceBlocked{Err: fmt.Errorf("reserve: %w", errConsoleSpendLimit)}, "spending_limit", 402},
+		{"balance", &nodes.ErrBalanceBlocked{Err: db.ErrInsufficientCredits}, "insufficient_credits", 402},
+		{"settings failure", errConsoleSpendCheck, "payment_check_failed", 503},
+		{"unknown reservation failure", &nodes.ErrBalanceBlocked{Err: errors.New("private database detail")}, "payment_check_failed", 503},
+		{"provider failure", errors.New("provider unavailable"), "", 200},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rec := httptest.NewRecorder()
+			if handled := respondConsolePaymentRefusal(rec, tc.err); handled != (tc.code != "") {
+				t.Fatalf("handled=%v", handled)
+			}
+			if rec.Code != tc.http {
+				t.Fatalf("status=%d want=%d", rec.Code, tc.http)
+			}
+			if tc.code == "" {
+				if rec.Body.Len() != 0 {
+					t.Fatal("unrelated error wrote a response")
+				}
+				return
+			}
+			var body map[string]string
+			if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil || body["code"] != tc.code {
+				t.Fatalf("response=%s error=%v", rec.Body, err)
+			}
+			if tc.http == 503 && body["error"] != "Could not check payment eligibility. Nothing was charged; try again later." {
+				t.Fatalf("unsafe infrastructure response: %s", rec.Body)
+			}
+		})
+	}
 }

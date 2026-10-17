@@ -24,6 +24,7 @@ import {
   type HelixboxSession,
   type HelixboxSpec,
 } from "@/lib/helixbox";
+import { PAYMENT_RECOVERY, type PaymentRefusalCode } from "@/lib/paymentRefusal";
 
 // HelixBox shares the x402 magenta the canvas tool node, the Inspector and the
 // Tendril and Prism consoles all use, so a paid endpoint reads as the same kind
@@ -427,10 +428,8 @@ export function HelixboxConsolePage() {
 
   const [buying, setBuying] = useState(false);
   const [runError, setRunError] = useState<string | null>(null);
-  // Set when the purchase was refused for want of credit (402). The error
-  // panel then offers a top-up instead of the generic note, and makes clear
-  // nothing was charged.
-  const [billingBlocked, setBillingBlocked] = useState(false);
+  const [refusalCode, setRefusalCode] = useState<PaymentRefusalCode | null>(null);
+  const recovery = refusalCode ? PAYMENT_RECOVERY[refusalCode] : null;
   const [result, setResult] = useState<HelixboxRunResult | null>(null);
 
   // Read through useSyncExternalStore rather than an effect that setStates on
@@ -502,7 +501,7 @@ export function HelixboxConsolePage() {
     if (!plan || buying || missingCode) return;
     setBuying(true);
     setRunError(null);
-    setBillingBlocked(false);
+    setRefusalCode(null);
     setResult(null);
     try {
       const res = await helixboxApi.run(plan.id, { code: trimmedCode });
@@ -535,7 +534,7 @@ export function HelixboxConsolePage() {
         });
       }
     } catch (e) {
-      setBillingBlocked(e instanceof HelixboxRunError && e.status === 402);
+      setRefusalCode(e instanceof HelixboxRunError ? e.code : null);
       setRunError(
         e instanceof Error ? e.message : "Something went wrong. Try again.",
       );
@@ -755,9 +754,7 @@ export function HelixboxConsolePage() {
                   >
                     {runError}
                   </div>
-                  {billingBlocked ? (
-                    // A 402 is refused before any payment, so the honest note
-                    // is "nothing moved" plus a way to fix it.
+                  {recovery ? (
                     <div style={{ marginTop: 10 }}>
                       <div
                         style={{
@@ -766,14 +763,14 @@ export function HelixboxConsolePage() {
                           lineHeight: 1.55,
                         }}
                       >
-                        You were not charged. Add credit and try again.
+                        {recovery.message}
                       </div>
                       <button
                         type="button"
-                        onClick={() => router.push("/billing")}
+                        onClick={() => router.push(recovery.href)}
                         style={{ ...ghostBtnSm, marginTop: 8 }}
                       >
-                        Add credits
+                        {recovery.label}
                       </button>
                     </div>
                   ) : (
