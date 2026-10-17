@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, assert, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { LandingPage } from "./LandingPage";
 
@@ -44,15 +44,21 @@ describe("retired waitlist landing", () => {
 
   it("keeps direct signup and studio sign-in available", () => {
     render(<LandingPage signedIn={false} />);
-    fireEvent.click(screen.getAllByRole("button", { name: "Sign Up" })[0]);
+    const [signUp] = screen.getAllByRole("button", { name: "Sign Up" });
+    assert.isDefined(signUp);
+    fireEvent.click(signUp);
     expect(push).toHaveBeenLastCalledWith("/signup");
-    fireEvent.click(screen.getAllByRole("button", { name: /Open Studio/ })[0]);
+    const [openStudio] = screen.getAllByRole("button", { name: /Open Studio/ });
+    assert.isDefined(openStudio);
+    fireEvent.click(openStudio);
     expect(push).toHaveBeenLastCalledWith("/signin");
   });
 
   it("opens existing workflows for a signed-in user", () => {
     render(<LandingPage signedIn />);
-    fireEvent.click(screen.getAllByRole("button", { name: /Open Studio/ })[0]);
+    const [openStudio] = screen.getAllByRole("button", { name: /Open Studio/ });
+    assert.isDefined(openStudio);
+    fireEvent.click(openStudio);
     expect(push).toHaveBeenLastCalledWith("/workflows");
     expect(screen.queryByRole("button", { name: "Sign Up" })).toBeNull();
   });

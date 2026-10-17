@@ -25,7 +25,7 @@ export function usdInput(micros: number): string {
 
 export function parseUsdInput(value: string): number | null {
   const parts = /^(\d+)(?:\.(\d{1,6}))?$/.exec(value.trim());
-  if (!parts || parts[1].length > 16) return null;
+  if (!parts || parts[1] === undefined || parts[1].length > 16) return null;
   const micros = Number(parts[1] + (parts[2] ?? "").padEnd(6, "0"));
   return Number.isSafeInteger(micros) ? micros : null;
 }

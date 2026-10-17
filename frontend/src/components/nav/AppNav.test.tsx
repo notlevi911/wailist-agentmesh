@@ -151,7 +151,7 @@ it("releases the sheet and scroll lock when the desktop breakpoint is crossed", 
   };
   vi.stubGlobal("matchMedia", () => media);
   const targets = [document.documentElement, document.body];
-  const previous = targets.map(({ style }) => ({ x: style.overflowX, y: style.overflowY }));
+  const previous = targets.map(({ style }) => ({ style, x: style.overflowX, y: style.overflowY }));
   navigation(vi.fn());
   fireEvent.click(screen.getByRole("button", { name: "Menu" }));
   for (const { style } of targets) {
@@ -160,8 +160,8 @@ it("releases the sheet and scroll lock when the desktop breakpoint is crossed", 
   }
   act(() => { media.matches = false; changed(); });
   expect(screen.getByRole("button", { name: "Menu" }).getAttribute("aria-expanded")).toBe("false");
-  targets.forEach(({ style }, index) => {
-    expect(style.overflowX).toBe(previous[index].x);
-    expect(style.overflowY).toBe(previous[index].y);
+  previous.forEach(({ style, x, y }) => {
+    expect(style.overflowX).toBe(x);
+    expect(style.overflowY).toBe(y);
   });
 });
