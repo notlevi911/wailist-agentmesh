@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/agentmesh/backend/internal/db"
 	"github.com/agentmesh/backend/internal/engine/nodes"
 	"github.com/agentmesh/backend/internal/models"
 	"github.com/agentmesh/backend/internal/prism"
@@ -205,11 +206,25 @@ func (d *Deps) prismRelayConfig(ledger nodes.PaymentLedger) nodes.X402RelayConfi
 	}
 }
 
-// isBalanceBlocked reports whether a run failed because the user is out of
-// credit, as opposed to anything the vendor or the network did.
 func isBalanceBlocked(err error) bool {
 	var blocked *nodes.ErrBalanceBlocked
 	return errors.As(err, &blocked)
+}
+
+func respondConsolePaymentRefusal(w http.ResponseWriter, err error) bool {
+	status, code, message := http.StatusPaymentRequired, "", ""
+	switch {
+	case errors.Is(err, errConsoleSpendLimit):
+		code, message = "spending_limit", err.Error()
+	case errors.Is(err, db.ErrInsufficientCredits):
+		code, message = "insufficient_credits", "Not enough credit. Nothing was charged."
+	case errors.Is(err, errConsoleSpendCheck), isBalanceBlocked(err):
+		status, code, message = http.StatusServiceUnavailable, "payment_check_failed", "Could not check payment eligibility. Nothing was charged; try again later."
+	default:
+		return false
+	}
+	respond.JSON(w, status, map[string]string{"error": message, "code": code})
+	return true
 }
 
 // relayUnpayable reports whether a result is executeTool402V2Relay's
@@ -307,12 +322,7 @@ func (d *Deps) PrismConsoleRun(w http.ResponseWriter, r *http.Request) {
 	d.Store.FinishRun(context.WithoutCancel(r.Context()), run.ID, status)
 
 	if execErr != nil {
-		// A blocked balance is the user's problem to fix (top up), not a
-		// gateway failure, so it gets 402 rather than 502. lib/prism.ts turns
-		// that status into a PrismRunError the console reads to show an "Add
-		// credits" button instead of a bare error line.
-		if isBalanceBlocked(execErr) {
-			respond.Error(w, http.StatusPaymentRequired, execErr.Error())
+		if respondConsolePaymentRefusal(w, execErr) {
 			return
 		}
 		respond.Error(w, http.StatusBadGateway, execErr.Error())

@@ -1,4 +1,5 @@
 import { BASE, apiFetch } from "@/lib/api";
+import { paymentRefusalCode, type PaymentRefusalCode } from "./paymentRefusal";
 
 // PRISM's x402 endpoints, as served by GET /prism/endpoints. The backend's
 // internal/prism package is the single source of truth for all of this — the
@@ -103,16 +104,14 @@ export function formatUsd(micros: number): string {
   return `$${(micros / 1e6).toFixed(2)}`;
 }
 
-// PrismRunError carries the HTTP status alongside the message so the console
-// can tell a blocked balance (402, backend's ErrBalanceBlocked) from a gateway
-// failure and offer a top-up instead of a bare error line. A 402 here means
-// the request was rejected BEFORE any payment, so nothing was charged.
 export class PrismRunError extends Error {
   readonly status: number;
-  constructor(message: string, status: number) {
+  readonly code: PaymentRefusalCode | null;
+  constructor(message: string, status: number, code?: unknown) {
     super(message);
     this.name = "PrismRunError";
     this.status = status;
+    this.code = paymentRefusalCode(status, code);
   }
 }
 
@@ -202,10 +201,7 @@ export const prism = {
     });
     const data = await res.json().catch(() => ({}));
     if (!res.ok) {
-      // PrismRunError, not a bare Error: a repo review refused for want of
-      // credit comes back as a 402 exactly like a single run, and the panel
-      // needs the status to offer a top-up instead of a dead red line.
-      throw new PrismRunError(data.error ?? "The review failed.", res.status);
+      throw new PrismRunError(data.error ?? "The review failed.", res.status, data.code);
     }
     return data as PrismRepoReviewResult;
   },
@@ -222,7 +218,7 @@ export const prism = {
     });
     const data = await res.json().catch(() => ({}));
     if (!res.ok) {
-      throw new PrismRunError(data.error ?? `run: ${res.status}`, res.status);
+      throw new PrismRunError(data.error ?? `run: ${res.status}`, res.status, data.code);
     }
     return data as PrismRunResult;
   },
