@@ -13,6 +13,13 @@ import { Preferences } from "@capacitor/preferences";
 import { Geofence } from "./nativeGeofence";
 
 const QUEUE_KEY = "agentmesh.geofence.queue";
+let queueLock: Promise<unknown> = Promise.resolve();
+
+function serialized<T>(operation: () => Promise<T>): Promise<T> {
+  const result = queueLock.then(operation, operation);
+  queueLock = result.catch(() => undefined);
+  return result;
+}
 
 // Bounded so a phone that is offline for a week cannot grow this without
 // limit. The oldest fixes are the least interesting -- the server ignores
@@ -86,19 +93,15 @@ async function drainNative(): Promise<void> {
 }
 
 export async function pending(now = Date.now()): Promise<Fix[]> {
-  await drainNative();
-  const all = await read();
-  const fresh = all.filter((f) => now - Date.parse(f.recordedAt) < MAX_AGE_MS);
-  // Persist the drop, not just the read-side filter: the privacy disclosure
-  // shown before Android's permission dialog promises a fix "is deleted...
-  // within a day if it never can be sent." Filtering fresh out of the return
-  // value without writing it back left every stale fix sitting in
-  // @capacitor/preferences indefinitely -- the promise wasn't kept, only the
-  // symptom (an old fix never being SENT) was masked.
-  if (fresh.length !== all.length) await write(fresh);
-  return fresh.sort(
-    (a, b) => Date.parse(a.recordedAt) - Date.parse(b.recordedAt),
-  );
+  return serialized(async () => {
+    await drainNative();
+    const all = await read();
+    const fresh = all.filter((f) => now - Date.parse(f.recordedAt) < MAX_AGE_MS);
+    if (fresh.length !== all.length) await write(fresh);
+    return fresh.sort(
+      (a, b) => Date.parse(a.recordedAt) - Date.parse(b.recordedAt),
+    );
+  });
 }
 
 // Matches sent/stored fixes on workflow + timestamp + seq (when present) --
@@ -110,10 +113,12 @@ function dedupKey(f: Fix): string {
 // Removes exactly the fixes that were accepted, matched on their timestamp and
 // workflow. Anything enqueued while a flush was in flight survives.
 export async function remove(sent: Fix[]): Promise<void> {
-  const gone = new Set(sent.map(dedupKey));
-  await write((await read()).filter((f) => !gone.has(dedupKey(f))));
+  return serialized(async () => {
+    const gone = new Set(sent.map(dedupKey));
+    await write((await read()).filter((f) => !gone.has(dedupKey(f))));
+  });
 }
 
 export async function clear(): Promise<void> {
-  await Preferences.remove({ key: QUEUE_KEY });
+  return serialized(() => Preferences.remove({ key: QUEUE_KEY }));
 }

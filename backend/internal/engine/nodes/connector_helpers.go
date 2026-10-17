@@ -3,7 +3,6 @@ package nodes
 import (
 	"bytes"
 	"context"
-	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -11,6 +10,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 
 	"github.com/agentmesh/backend/internal/models"
 )
@@ -113,7 +113,7 @@ func postJSON(ctx context.Context, target string, extraHeaders map[string]string
 // safe. This is every connector's shared low-level HTTP call, so gating on
 // the request's own method here (rather than per-connector) automatically
 // makes every current and future GET-based connector (RSS, OpenWeatherMap,
-// Calendly, Telegram getUpdates, Google Drive downloads, ...) retryable
+// Calendly, Telegram getUpdates, Google Sheets reads, ...) retryable
 // without touching each one, while every POST-based send (Slack, Jira,
 // Gmail, ...) stays correctly non-retryable -- a retry after an ambiguous
 // POST failure could double-send a message/ticket/email, which is exactly
@@ -273,8 +273,121 @@ func unwrapURLError(err error) error {
 // basicAuthHeader builds an Authorization: Basic header map from a
 // username:password pair (RFC 7617).
 func basicAuthHeader(user, pass string) map[string]string {
-	auth := base64.StdEncoding.EncodeToString([]byte(user + ":" + pass))
-	return map[string]string{"Authorization": "Basic " + auth}
+	// Built by net/http's own SetBasicAuth (RFC 7617) rather than by hand, so
+	// the header can never drift from what a *http.Request would send (#12).
+	req := http.Request{Header: http.Header{}}
+	req.SetBasicAuth(user, pass)
+	return map[string]string{"Authorization": req.Header.Get("Authorization")}
+}
+
+// apiBaseDefaults holds each connector's real API base URL, keyed by service
+// name. A "" default means the connector builds its host per node from user
+// config (a Shopify store, a Jira domain, a Mailchimp datacenter) and only
+// reads apiBase to find out whether a test has pointed it at a local server.
+//
+// Together with apiBase and setAPIBaseForTest, this replaces the hand-written
+// `var xAPIBase = "..."` plus eight-line SetXAPIBaseForTest pair every
+// connector used to carry (#12). The exported SetXAPIBaseForTest functions
+// remain as one-line wrappers, so no test call site changes.
+var apiBaseDefaults = map[string]string{
+	// action.go: email providers
+	"resend":   "https://api.resend.com",
+	"sendgrid": "https://api.sendgrid.com",
+	"brevo":    "https://api.brevo.com",
+	"postmark": "https://api.postmarkapp.com",
+
+	// connectors_business.go
+	"intercom":    "https://api.intercom.io",
+	"openweather": "https://api.openweathermap.org",
+	"calendly":    "https://api.calendly.com",
+	"shopify":     "", // order notes: host built per node from the shop domain
+	"baserow":     "https://api.baserow.io",
+
+	// connectors_commerce.go
+	"stripe":           "https://api.stripe.com",
+	"shopify_customer": "", // host built per node from the store name
+	"pipedrive":        "", // host built per node from the company domain
+
+	// connectors_data.go
+	"hubspot":   "https://api.hubapi.com",
+	"mailchimp": "", // host built per node from the account's datacenter
+
+	// connectors_devtools.go
+	"github":       "https://api.github.com",
+	"jira":         "", // host built per node: {domain}.atlassian.net, or api.atlassian.com for OAuth
+	"linear":       "https://api.linear.app",
+	"gitlab_oauth": "https://gitlab.com", // fixed on purpose, see SetGitLabOAuthAPIBaseForTest
+
+	// connectors_feed.go
+	"hackernews": "https://hn.algolia.com/api/v1",
+	"coingecko":  "https://api.coingecko.com/api/v3",
+
+	// connectors_media.go
+	"elevenlabs": "https://api.elevenlabs.io",
+
+	// connectors_messaging.go
+	"slack":    "https://slack.com",
+	"telegram": "https://api.telegram.org",
+
+	// connectors_ops.go
+	"twilio":    "https://api.twilio.com/2010-04-01",
+	"pagerduty": "https://events.pagerduty.com",
+	"zendesk":   "", // host built per node from the subdomain
+	"monday":    "https://api.monday.com",
+
+	// connectors_productivity.go
+	"notion":   "https://api.notion.com",
+	"airtable": "https://api.airtable.com",
+	"trello":   "https://api.trello.com",
+	"asana":    "https://app.asana.com",
+	"clickup":  "https://api.clickup.com",
+	"todoist":  "https://api.todoist.com",
+
+	// google.go
+	"gmail":        "https://gmail.googleapis.com/gmail/v1",
+	"sheets":       "https://sheets.googleapis.com/v4/spreadsheets",
+	"calendar":     "https://www.googleapis.com/calendar/v3/calendars",
+	"google_token": "https://oauth2.googleapis.com/token",
+}
+
+// apiBases holds each service's current, possibly test-overridden, base URL,
+// seeded from apiBaseDefaults. Guarded by apiBasesMu: a run executes
+// connectors from concurrent goroutines, and Go aborts the process on a map
+// read that races a write, where the old per-connector string vars only raced
+// silently.
+var (
+	apiBasesMu sync.RWMutex
+	apiBases   = func() map[string]string {
+		m := make(map[string]string, len(apiBaseDefaults))
+		for k, v := range apiBaseDefaults {
+			m[k] = v
+		}
+		return m
+	}()
+)
+
+// apiBase returns service's current base URL: its real API, unless a test
+// has overridden it. "" for a per-node-host connector with no override.
+func apiBase(service string) string {
+	apiBasesMu.RLock()
+	defer apiBasesMu.RUnlock()
+	return apiBases[service]
+}
+
+// setAPIBaseForTest points service at base; "" restores its default. Panics
+// on a service with no apiBaseDefaults entry, so a typo in a new wrapper fails
+// the first test that calls it instead of silently overriding nothing.
+func setAPIBaseForTest(service, base string) {
+	def, ok := apiBaseDefaults[service]
+	if !ok {
+		panic("setAPIBaseForTest: unknown service " + service)
+	}
+	if base == "" {
+		base = def
+	}
+	apiBasesMu.Lock()
+	defer apiBasesMu.Unlock()
+	apiBases[service] = base
 }
 
 // issueTitle derives a short title from a longer message: its first non-blank

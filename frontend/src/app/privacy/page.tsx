@@ -21,7 +21,7 @@ export const metadata: Metadata = {
     "How AgentMesh handles your data, including location used for workflow triggers.",
 };
 
-const EFFECTIVE = "3 September 2026";
+const EFFECTIVE = "6 October 2026";
 const COMPANY = "AgentMesh";
 const CONTACT = "privacy@agent-mesh.app";
 
@@ -101,12 +101,28 @@ export default function PrivacyPage() {
               and the {COMPANY} Android app. Where the two differ (and on
               location, they differ considerably) the difference is stated.
             </P>
+            <P>
+              The Android app runs and monitors workflows; it does not build
+              them. Creating or editing a workflow, and connecting or
+              disconnecting the services it uses, is done in the {COMPANY}{" "}
+              desktop app at agent-mesh.app. So the workflow content and
+              connected-account data described below are entered there, not on
+              your phone.
+            </P>
           </Section>
 
           <Section n="2" title="Information you give us">
             <P>
-              <strong>Account details.</strong> Your email address and a hashed
-              password. We never store your password itself.
+              <strong>Account details.</strong> Your email address, the name you
+              give us, and, if you give one, the name of your organisation. If
+              you sign up with a password, we keep only a hash of it, never the
+              password itself.
+            </P>
+            <P>
+              <strong>Signing in with Google or GitHub.</strong> We ask the
+              provider only for your verified email address, and use it to find
+              or create your account. We do not receive or store your Google or
+              GitHub password.
             </P>
             <P>
               <strong>Workflow content.</strong> The workflows you build, the
@@ -115,12 +131,89 @@ export default function PrivacyPage() {
               encrypted before storage.
             </P>
             <P>
+              <strong>Connected accounts.</strong> If you connect a service such
+              as Google (Gmail sending, Sheets, Calendar), Slack, Notion or Jira
+              so a workflow can use it, we store the access tokens that service
+              issues, encrypted. They are used only to perform the actions your
+              workflows are configured to take, such as sending an email or
+              updating a spreadsheet, and only when those workflows run. We do
+              not read your Gmail messages or access your Google Drive. You can
+              disconnect at any time from the desktop app, and revoke access
+              from the service&rsquo;s own account settings. {COMPANY}&rsquo;s
+              use of information received from Google APIs adheres to the{" "}
+              <a
+                href="https://developers.google.com/terms/api-services-user-data-policy"
+                style={inlineLink}
+              >
+                Google API Services User Data Policy
+              </a>
+              , including the Limited Use requirements.
+            </P>
+            <P>
               <strong>Billing information.</strong> Records of credits purchased
               and consumed, and of on-chain payments made by your workflows.
             </P>
           </Section>
 
-          <Section n="3" title="Location, in the Android app">
+          <Section n="3" title="Google user data">
+            <P>
+              This section applies if you connect a Google account to a
+              workflow. It covers data {COMPANY} receives through Google APIs.
+            </P>
+            <P>
+              <strong>What we access.</strong> Only what the Google steps in
+              your workflows need, using three permissions: sending email from
+              your Gmail account (we cannot read, list or delete your mail),
+              reading and adding rows in Google Sheets you specify, and listing
+              and creating events in your Google Calendar. We also receive the
+              email address of the Google account you connect, to show you which
+              account a workflow uses. We do not access Google Drive.
+            </P>
+            <P>
+              <strong>How we use it.</strong> Only to carry out the step your
+              workflow is configured to perform, when that workflow runs: for
+              example sending the email it composes, appending its result to a
+              sheet, or creating the event it describes.
+            </P>
+            <P>
+              <strong>Who we share it with.</strong> We do not sell Google user
+              data or share it with third parties, except as needed to run the
+              workflow you built: if your workflow passes the result of a Google
+              step to an AI model or another connected service, that result is
+              sent there because you configured it to be. We do not use Google
+              user data for advertising, credit or lending decisions, or to
+              train AI or machine-learning models, and no person at {COMPANY}
+              reads it unless you ask us to for support, or the law requires it.
+            </P>
+            <P>
+              <strong>How we protect it.</strong> Google access and refresh
+              tokens are encrypted at rest and only used server-side to make the
+              API calls your workflows request. All traffic is encrypted in
+              transit.
+            </P>
+            <P>
+              <strong>Retention and deletion.</strong> Tokens are kept until you
+              disconnect the Google account, at which point we delete them; you
+              can also revoke access at any time from your Google
+              Account&rsquo;s security settings. Results of Google steps, such
+              as rows read from a sheet, can appear in that workflow&rsquo;s run
+              history, which is deleted when you delete the workflow or your
+              account.
+            </P>
+            <P>
+              {COMPANY}&rsquo;s use and transfer of information received from
+              Google APIs adheres to the{" "}
+              <a
+                href="https://developers.google.com/terms/api-services-user-data-policy"
+                style={inlineLink}
+              >
+                Google API Services User Data Policy
+              </a>
+              , including the Limited Use requirements.
+            </P>
+          </Section>
+
+          <Section n="4" title="Location, in the Android app">
             <P>
               This section exists because it is the part people most want a
               straight answer about.
@@ -154,7 +247,7 @@ export default function PrivacyPage() {
             </P>
           </Section>
 
-          <Section n="4" title="Notifications">
+          <Section n="5" title="Notifications">
             <P>
               If you allow notifications, your device is issued a registration
               token by Google&rsquo;s Firebase Cloud Messaging, and we store
@@ -164,7 +257,7 @@ export default function PrivacyPage() {
             </P>
           </Section>
 
-          <Section n="5" title="What we do not do">
+          <Section n="6" title="What we do not do">
             <P>
               We do not sell your personal information. We do not share it with
               third parties for their own advertising or marketing. We do not
@@ -172,7 +265,7 @@ export default function PrivacyPage() {
             </P>
           </Section>
 
-          <Section n="6" title="Service providers">
+          <Section n="7" title="Service providers">
             <P>
               Running the product means some data passes through others: hosting
               and database providers, Google&rsquo;s Firebase Cloud Messaging
@@ -184,11 +277,18 @@ export default function PrivacyPage() {
             </P>
           </Section>
 
-          <Section n="7" title="Retention and deletion">
+          <Section n="8" title="Retention and deletion">
             <P>
               Account and workflow data is kept while your account is open.
               Deleting a workflow deletes its configuration and its run history.
-              To delete your account and the data associated with it, write to{" "}
+              To delete your account and associated application data, use the
+              profile menu&apos;s Delete account control, or visit our{" "}
+              <Link href="/delete-account" style={inlineLink}>
+                account deletion page
+              </Link>
+              . It explains what is removed, prerequisites and the web deletion
+              path. For help with deletion, including copies held by connected
+              services, operational logs or backups, write to{" "}
               <a href={`mailto:${CONTACT}`} style={inlineLink}>
                 {CONTACT}
               </a>
@@ -196,7 +296,7 @@ export default function PrivacyPage() {
             </P>
           </Section>
 
-          <Section n="8" title="Security">
+          <Section n="9" title="Security">
             <P>
               Traffic is encrypted in transit. Connector credentials are
               encrypted at rest, and on Android the session token is held in
@@ -205,14 +305,14 @@ export default function PrivacyPage() {
             </P>
           </Section>
 
-          <Section n="9" title="Children">
+          <Section n="10" title="Children">
             <P>
               {COMPANY} is not intended for children under 13, and we do not
               knowingly collect their information.
             </P>
           </Section>
 
-          <Section n="10" title="Changes">
+          <Section n="11" title="Changes">
             <P>
               If this policy changes materially, we will update the effective
               date above and notify account holders. Continuing to use {COMPANY}{" "}
@@ -220,7 +320,7 @@ export default function PrivacyPage() {
             </P>
           </Section>
 
-          <Section n="11" title="Contact">
+          <Section n="12" title="Contact">
             <P>
               Questions, requests, or complaints:{" "}
               <a href={`mailto:${CONTACT}`} style={inlineLink}>

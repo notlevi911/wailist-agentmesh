@@ -84,6 +84,21 @@ func TestCoinGeckoRepeatsWithinAMinuteAreOneRequest(t *testing.T) {
 	}
 }
 
+func TestCoinGeckoAPIBaseOverrideClearsCachedData(t *testing.T) {
+	var status atomic.Int32
+	hits := cgStub(t, &status, 0)
+	if _, err := price(t); err != nil {
+		t.Fatal(err)
+	}
+	SetCoinGeckoAPIBaseForTest(apiBase("coingecko"))
+	if _, err := price(t); err != nil {
+		t.Fatal(err)
+	}
+	if got := hits.Load(); got != 2 {
+		t.Fatalf("requests after resetting the same endpoint = %d, want 2", got)
+	}
+}
+
 func TestCoinGeckoAskedAgainAfterAMinute(t *testing.T) {
 	var status atomic.Int32
 	hits := cgStub(t, &status, 0)

@@ -112,11 +112,13 @@ export function isValidConnection(
   // Gated on toPort before type: tool/tool402 are ALSO valid flow sources
   // into an agent's "in" port, which the branch below handles.
   if (toPort === "model") {
-    return from.type === "provider" && to.type === "agent";
+    return fromPort === "top" && from.type === "provider" && to.type === "agent";
   }
   if (toPort === "tools") {
     return (
-      (from.type === "tool" || from.type === "tool402") && to.type === "agent"
+      fromPort === "top" &&
+      (from.type === "tool" || from.type === "tool402") &&
+      to.type === "agent"
     );
   }
   // flow: trigger/agent/action/state/tool/tool402/tendril → agent/action/
@@ -132,7 +134,7 @@ export function isValidConnection(
   // attached to an agent. provider is deliberately excluded here -- see
   // PORT_POS's comment on it in portUtils.ts above: a standalone provider
   // flow step is a backend no-op, so it stays attach-only.
-  if (toPort === "in") {
+  if (fromPort === "out" && toPort === "in") {
     return (
       (
         [

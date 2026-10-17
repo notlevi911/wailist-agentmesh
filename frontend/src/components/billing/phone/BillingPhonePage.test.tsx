@@ -31,6 +31,9 @@ function renderPage(over: Partial<BillingPhoneProps> = {}) {
   const props: BillingPhoneProps = {
     balanceUSD: 5.24,
     balanceKnown: true,
+    balanceLoading: false,
+    balanceFailed: false,
+    onRetryBalance: vi.fn(async () => {}),
     isLow: false,
     spent30dUSD: 8.71,
     returnState: null,
@@ -83,7 +86,7 @@ describe("BillingPhonePage", () => {
   it("shows a dash for spend until it is known", () => {
     const { container } = renderPage({ spent30dUSD: null });
     const stat = screen.getByText("Spent · 30d").parentElement!;
-    expect(stat.textContent).toContain("—");
+    expect(stat.textContent).toContain("-");
     expect(container.textContent).not.toContain("$0.00");
   });
 
@@ -97,7 +100,7 @@ describe("BillingPhonePage", () => {
 
   it("shows a dash, not $0.00, until the balance is known", () => {
     const { container } = renderPage({ balanceKnown: false, balanceUSD: 0 });
-    expect(screen.getByText("—")).toBeTruthy();
+    expect(screen.getByText("-")).toBeTruthy();
     expect(container.textContent).not.toContain("$0.00");
   });
 });
@@ -119,7 +122,7 @@ describe("the quote", () => {
 
   it("quotes nothing at all until the rate arrives", () => {
     const { container } = renderPage({ usdPerINR: 0 });
-    expect(container.textContent).toContain("≈ —");
+    expect(container.textContent).toContain("≈ -");
     expect(container.textContent).not.toMatch(/≈ \$/);
   });
 
@@ -193,7 +196,7 @@ describe("the coupon", () => {
       couponCode: "WELCOME",
       onApplyCoupon,
       couponState: "success",
-      couponMessage: "Coupon applied — $5.00 added to your balance.",
+      couponMessage: "Coupon applied: $5.00 added to your balance.",
     });
     fireEvent.click(screen.getByRole("button", { name: /Have a coupon/ }));
     fireEvent.click(screen.getByRole("button", { name: "Apply" }));
@@ -290,5 +293,30 @@ describe("the way back", () => {
     expect(
       screen.getByRole("link", { name: /Back/ }).getAttribute("href"),
     ).toBe("/workflows");
+  });
+});
+
+
+describe("phone balance recovery", () => {
+  it("shows first failure and an observable retry before recovery", () => {
+    const view = renderPage({ balanceKnown: false, balanceFailed: true });
+    expect(screen.getByText("Could not load your balance.")).toBeTruthy();
+    expect(screen.getByText("Unavailable")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Retry balance" }));
+    expect(view.props.onRetryBalance).toHaveBeenCalledOnce();
+    view.rerender(<BillingPhonePage {...view.props} balanceLoading />);
+    expect((screen.getByRole("button", { name: "Retry balance" }) as HTMLButtonElement).disabled).toBe(true);
+    expect(screen.getByText("Retrying…")).toBeTruthy();
+    view.rerender(<BillingPhonePage {...view.props} balanceKnown balanceFailed={false} />);
+    expect(screen.queryByRole("button", { name: "Retry balance" })).toBeNull();
+    expect(screen.getByText("Active")).toBeTruthy();
+  });
+
+  it("keeps and labels the last known amount after refresh failure", () => {
+    renderPage({ balanceFailed: true });
+    expect(screen.getByText("$5.24")).toBeTruthy();
+    expect(screen.getByText("Could not refresh your balance. Showing the last known amount.")).toBeTruthy();
+    expect(screen.getByText("Unavailable")).toBeTruthy();
+    expect(screen.queryByText("Active")).toBeNull();
   });
 });

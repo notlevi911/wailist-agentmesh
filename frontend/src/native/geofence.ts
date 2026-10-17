@@ -13,7 +13,7 @@ import { Network } from "@capacitor/network";
 import type { PluginListenerHandle } from "@capacitor/core";
 import { Geofence } from "./nativeGeofence";
 import { pushFix } from "./api";
-import { pending, remove, type Fix } from "./queue";
+import { pending, remove, clear, type Fix } from "./queue";
 
 let flushing = false;
 
@@ -140,5 +140,19 @@ export async function stop(workflowId: string): Promise<void> {
       await networkListener.remove();
       networkListener = null;
     }
+  });
+}
+
+export async function clearAccountGeofences(): Promise<void> {
+  await withListenerLock(async () => {
+    armedWorkflows.clear();
+    const results = await Promise.allSettled([
+      Geofence.clearAccountData(),
+      networkListener?.remove(),
+    ]);
+    networkListener = null;
+    results.push(...await Promise.allSettled([clear()]));
+    const errors = results.filter((result) => result.status === "rejected");
+    if (errors.length) throw new AggregateError(errors.map((result) => result.reason), "Location cleanup incomplete");
   });
 }

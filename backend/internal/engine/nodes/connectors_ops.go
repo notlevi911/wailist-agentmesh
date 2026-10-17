@@ -9,18 +9,9 @@ import (
 	"github.com/agentmesh/backend/internal/models"
 )
 
-// twilioAPIBase is overridden in tests via SetTwilioAPIBaseForTest.
-var twilioAPIBase = "https://api.twilio.com/2010-04-01"
-
 // SetTwilioAPIBaseForTest overrides the Twilio API base URL. Call only from
 // tests. Pass "" to reset to the real API.
-func SetTwilioAPIBaseForTest(base string) {
-	if base == "" {
-		twilioAPIBase = "https://api.twilio.com/2010-04-01"
-	} else {
-		twilioAPIBase = base
-	}
-}
+func SetTwilioAPIBaseForTest(base string) { setAPIBaseForTest("twilio", base) }
 
 // sendTwilio sends the run output as an SMS. Twilio uses HTTP Basic auth
 // (Account SID / Auth Token) and form encoding.
@@ -57,7 +48,7 @@ func sendTwilio(ctx context.Context, node models.WorkflowNode, rc RunContexter) 
 	form.Set("From", from)
 	form.Set("Body", resolveMessage(node, rc))
 
-	req, err := newFormRequest(ctx, twilioAPIBase+"/Accounts/"+url.PathEscape(sid)+"/Messages.json", form)
+	req, err := newFormRequest(ctx, apiBase("twilio")+"/Accounts/"+url.PathEscape(sid)+"/Messages.json", form)
 	if err != nil {
 		return nil, fmt.Errorf("Twilio: %w", err)
 	}
@@ -82,18 +73,9 @@ func sendMattermost(ctx context.Context, node models.WorkflowNode, rc RunContext
 	return postJSON(ctx, hookURL, nil, payload, "mattermost_sent", "Mattermost")
 }
 
-// pagerdutyAPIBase is overridden in tests via SetPagerDutyAPIBaseForTest.
-var pagerdutyAPIBase = "https://events.pagerduty.com"
-
 // SetPagerDutyAPIBaseForTest overrides the PagerDuty Events API base URL.
 // Call only from tests. Pass "" to reset to the real API.
-func SetPagerDutyAPIBaseForTest(base string) {
-	if base == "" {
-		pagerdutyAPIBase = "https://events.pagerduty.com"
-	} else {
-		pagerdutyAPIBase = base
-	}
-}
+func SetPagerDutyAPIBaseForTest(base string) { setAPIBaseForTest("pagerduty", base) }
 
 // sendPagerDuty triggers a PagerDuty Events API v2 alert with the run output
 // as the incident summary.
@@ -116,19 +98,16 @@ func sendPagerDuty(ctx context.Context, node models.WorkflowNode, rc RunContexte
 			"source":   resolveTemplate(configVal(node, "pagerdutySource", "agentmesh"), rc),
 		},
 	}
-	return postJSON(ctx, pagerdutyAPIBase+"/v2/enqueue", nil, payload,
+	return postJSON(ctx, apiBase("pagerduty")+"/v2/enqueue", nil, payload,
 		"pagerduty_event_triggered", "PagerDuty")
 }
 
-// zendeskAPIBase is overridden in tests via SetZendeskAPIBaseForTest.
+// SetZendeskAPIBaseForTest overrides the Zendesk API base URL entirely.
 // Normally "https://{subdomain}.zendesk.com" is built per-node, so the test
 // override replaces the whole scheme+host and sendZendesk skips that
-// construction when it is set. Same shape as mailchimpAPIBase.
-var zendeskAPIBase = ""
-
-// SetZendeskAPIBaseForTest overrides the Zendesk API base URL entirely.
+// construction when it is set. Same shape as SetMailchimpAPIBaseForTest.
 // Call only from tests. Pass "" to reset to the real per-subdomain host.
-func SetZendeskAPIBaseForTest(base string) { zendeskAPIBase = base }
+func SetZendeskAPIBaseForTest(base string) { setAPIBaseForTest("zendesk", base) }
 
 // sendZendesk opens a support ticket with the run output as the first comment.
 // Zendesk authenticates with Basic auth where the username is
@@ -151,7 +130,7 @@ func sendZendesk(ctx context.Context, node models.WorkflowNode, rc RunContexter)
 	if !jiraDomainPattern.MatchString(subdomain) {
 		return "zendesk_skipped_invalid_subdomain", ErrActionSkipped
 	}
-	base := zendeskAPIBase
+	base := apiBase("zendesk")
 	if base == "" {
 		base = "https://" + url.PathEscape(subdomain) + ".zendesk.com"
 	}
@@ -168,18 +147,9 @@ func sendZendesk(ctx context.Context, node models.WorkflowNode, rc RunContexter)
 	return doAndCheck(req, "zendesk_ticket_created", "Zendesk")
 }
 
-// mondayAPIBase is overridden in tests via SetMondayAPIBaseForTest.
-var mondayAPIBase = "https://api.monday.com"
-
 // SetMondayAPIBaseForTest overrides the Monday.com API base URL. Call only
 // from tests. Pass "" to reset to the real API.
-func SetMondayAPIBaseForTest(base string) {
-	if base == "" {
-		mondayAPIBase = "https://api.monday.com"
-	} else {
-		mondayAPIBase = base
-	}
-}
+func SetMondayAPIBaseForTest(base string) { setAPIBaseForTest("monday", base) }
 
 // mondayCreateItem is the GraphQL mutation Monday.com's v2 API takes. Board
 // IDs are ID! and item names String! — passed as variables rather than
@@ -207,7 +177,7 @@ func sendMonday(ctx context.Context, node models.WorkflowNode, rc RunContexter) 
 	}
 	// Monday.com expects the bare token, with no "Bearer " prefix.
 	headers := map[string]string{"Authorization": apiKey, "API-Version": "2023-10"}
-	req, err := newJSONRequest(ctx, http.MethodPost, mondayAPIBase+"/v2", headers, payload)
+	req, err := newJSONRequest(ctx, http.MethodPost, apiBase("monday")+"/v2", headers, payload)
 	if err != nil {
 		return nil, fmt.Errorf("Monday.com: %w", err)
 	}

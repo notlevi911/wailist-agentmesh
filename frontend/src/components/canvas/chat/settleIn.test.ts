@@ -92,6 +92,16 @@ describe("lastUnboundPendingIndex", () => {
     ]);
     expect(idx).toBe(-1);
   });
+
+  // #67: a build turn is pending with no runId for the whole build, but no
+  // run will ever belong to it.
+  it("never picks a chat build's turn", () => {
+    const idx = lastUnboundPendingIndex([
+      msg({ id: "a-run", pending: true }),
+      msg({ id: "a-build", pending: true, build: true }),
+    ]);
+    expect(idx).toBe(0);
+  });
 });
 
 describe("attachRunIn", () => {
@@ -107,6 +117,25 @@ describe("attachRunIn", () => {
     const out = attachRunIn([], "r-1");
     expect(out).toHaveLength(1);
     expect(out[0]).toMatchObject({
+      sender: "assistant",
+      pending: true,
+      runId: "r-1",
+    });
+  });
+
+  // #67: the topbar Run button pressed while a chat build is still in flight.
+  // The run gets its own turn; the build's turn stays unbound so the build's
+  // reply still settles it and the run's outcome still reaches the chat.
+  it("gives a run started mid-build its own turn instead of the build's", () => {
+    const building = [
+      msg({ id: "u-1", sender: "user", text: "add a weather step" }),
+      msg({ id: "a-build", pending: true, build: true }),
+    ];
+    const out = attachRunIn(building, "r-1");
+    expect(out).toHaveLength(3);
+    expect(out[1]).toMatchObject({ id: "a-build", pending: true });
+    expect(out[1].runId).toBeUndefined();
+    expect(out[2]).toMatchObject({
       sender: "assistant",
       pending: true,
       runId: "r-1",

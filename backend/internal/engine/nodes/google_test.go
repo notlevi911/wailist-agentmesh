@@ -71,7 +71,7 @@ func TestExecuteGoogle_UnknownTemplateErrors(t *testing.T) {
 
 func TestGoogleAccessToken_ErrorsWhenNoCredentialSelected(t *testing.T) {
 	cfg, _ := googleTestSetup(t, "u1")
-	node := models.WorkflowNode{ID: "g2", Type: models.NodeTypeGoogle, Template: "gmail_list"}
+	node := models.WorkflowNode{ID: "g2", Type: models.NodeTypeGoogle, Template: "gmail_send"}
 	rc := engine.NewRunContext("r1", nil)
 	_, err := nodes.ExecuteGoogle(context.Background(), node, rc, cfg)
 	if err == nil || !strings.Contains(err.Error(), "no connected account") {
@@ -90,7 +90,7 @@ func TestGoogleAccessToken_DeniesNonGoogleCredential(t *testing.T) {
 	cred.Provider = "slack"
 	store.creds["cred1"] = cred
 
-	node := models.WorkflowNode{ID: "g3b", Type: models.NodeTypeGoogle, Template: "gmail_list", Config: config}
+	node := models.WorkflowNode{ID: "g3b", Type: models.NodeTypeGoogle, Template: "gmail_send", Config: config}
 	rc := engine.NewRunContext("r1", nil)
 	_, err := nodes.ExecuteGoogle(context.Background(), node, rc, cfg)
 	if err == nil || !strings.Contains(err.Error(), "not a Google credential") {
@@ -105,7 +105,7 @@ func TestGoogleAccessToken_DeniesNonGoogleCredential(t *testing.T) {
 func TestGoogleAccessToken_DeniesAccessToAnotherUsersCredential(t *testing.T) {
 	cfg, config := googleTestSetup(t, "owner-user")
 	node := models.WorkflowNode{
-		ID: "g3", Type: models.NodeTypeGoogle, Template: "gmail_list", Config: config,
+		ID: "g3", Type: models.NodeTypeGoogle, Template: "gmail_send", Config: config,
 	}
 	// Same node, but the RUN belongs to a different user than the
 	// credential's owner.
@@ -114,110 +114,6 @@ func TestGoogleAccessToken_DeniesAccessToAnotherUsersCredential(t *testing.T) {
 	_, err := nodes.ExecuteGoogle(context.Background(), node, rc, cfg)
 	if err == nil || !strings.Contains(err.Error(), "does not belong to this user") {
 		t.Fatalf("want ownership-denied error, got %v", err)
-	}
-}
-
-func TestGmailList_ReturnsDecodedMessages(t *testing.T) {
-	var gotAuth, gotQuery string
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		gotAuth = r.Header.Get("Authorization")
-		gotQuery = r.URL.RawQuery
-		w.Write([]byte(`{"messages":[{"id":"m1"},{"id":"m2"}]}`))
-	}))
-	defer srv.Close()
-	nodes.SetGoogleAPIBasesForTest(srv.URL, "", "x", "x")
-	defer nodes.SetGoogleAPIBasesForTest("", "", "", "")
-
-	cfg, config := googleTestSetup(t, "u1")
-	config["gmailQuery"] = "is:unread"
-	config["gmailMaxResults"] = "5"
-	node := models.WorkflowNode{ID: "g4", Type: models.NodeTypeGoogle, Template: "gmail_list", Config: config}
-	rc := engine.NewRunContext("r1", nil)
-
-	result, err := nodes.ExecuteGoogle(context.Background(), node, rc, cfg)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if gotAuth != "Bearer live-access-token" {
-		t.Errorf("want bearer token, got %q", gotAuth)
-	}
-	if !strings.Contains(gotQuery, "is%3Aunread") && !strings.Contains(gotQuery, "is:unread") {
-		t.Errorf("want query param passed through, got %q", gotQuery)
-	}
-	m, ok := result.(map[string]any)
-	if !ok || m["messages"] == nil {
-		t.Errorf("want decoded messages list, got %v", result)
-	}
-}
-
-// A real (trimmed) multipart/alternative Gmail message: text/plain sibling
-// next to text/html, which is the common real-world shape this has to
-// handle correctly, not just a flat single-part message.
-func gmailFixtureMessage(t *testing.T, plainText string) string {
-	t.Helper()
-	encoded := base64.RawURLEncoding.EncodeToString([]byte(plainText))
-	msg := map[string]any{
-		"id": "msg123", "threadId": "thread123", "snippet": "preview...",
-		"payload": map[string]any{
-			"mimeType": "multipart/alternative",
-			"headers": []map[string]any{
-				{"name": "Subject", "value": "Test Subject"},
-				{"name": "From", "value": "sender@example.com"},
-				{"name": "To", "value": "me@example.com"},
-				{"name": "Date", "value": "Thu, 6 Aug 2026 12:00:00 +0000"},
-			},
-			"parts": []map[string]any{
-				{"mimeType": "text/plain", "body": map[string]any{"data": encoded}},
-				{"mimeType": "text/html", "body": map[string]any{"data": base64.RawURLEncoding.EncodeToString([]byte("<p>" + plainText + "</p>"))}},
-			},
-		},
-	}
-	b, err := json.Marshal(msg)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return string(b)
-}
-
-func TestGmailGet_ExtractsPlainTextBodyAndHeadersFromMultipartMessage(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Write([]byte(gmailFixtureMessage(t, "Hello, this is the real message body.")))
-	}))
-	defer srv.Close()
-	nodes.SetGoogleAPIBasesForTest(srv.URL, "", "x", "x")
-	defer nodes.SetGoogleAPIBasesForTest("", "", "", "")
-
-	cfg, config := googleTestSetup(t, "u1")
-	config["gmailMessageID"] = "msg123"
-	node := models.WorkflowNode{ID: "g5", Type: models.NodeTypeGoogle, Template: "gmail_get", Config: config}
-	rc := engine.NewRunContext("r1", nil)
-
-	result, err := nodes.ExecuteGoogle(context.Background(), node, rc, cfg)
-	if err != nil {
-		t.Fatal(err)
-	}
-	m, ok := result.(map[string]any)
-	if !ok {
-		t.Fatalf("want a decoded map, got %T", result)
-	}
-	if m["subject"] != "Test Subject" || m["from"] != "sender@example.com" {
-		t.Errorf("want headers extracted, got subject=%v from=%v", m["subject"], m["from"])
-	}
-	if m["body"] != "Hello, this is the real message body." {
-		t.Errorf("want plain-text body decoded from base64url, got %v", m["body"])
-	}
-}
-
-func TestGmailGet_SkipsWhenNoMessageID(t *testing.T) {
-	cfg, config := googleTestSetup(t, "u1")
-	node := models.WorkflowNode{ID: "g6", Type: models.NodeTypeGoogle, Template: "gmail_get", Config: config}
-	rc := engine.NewRunContext("r1", nil)
-	result, err := nodes.ExecuteGoogle(context.Background(), node, rc, cfg)
-	if err != nodes.ErrActionSkipped {
-		t.Fatalf("want ErrActionSkipped, got %v", err)
-	}
-	if result != "gmail_skipped_no_message_id" {
-		t.Errorf("want skip sentinel, got %v", result)
 	}
 }
 
@@ -230,8 +126,8 @@ func TestGmailSend_BuildsCorrectRawRFC2822MessageAndSkipsWithoutRecipient(t *tes
 		w.Write([]byte(`{"id":"sent1"}`))
 	}))
 	defer srv.Close()
-	nodes.SetGoogleAPIBasesForTest(srv.URL, "", "x", "x")
-	defer nodes.SetGoogleAPIBasesForTest("", "", "", "")
+	nodes.SetGoogleAPIBasesForTest(srv.URL, "", "x")
+	defer nodes.SetGoogleAPIBasesForTest("", "", "")
 
 	cfg, config := googleTestSetup(t, "u1")
 	config["gmailTo"] = "recipient@example.com"
@@ -284,8 +180,8 @@ func TestGmailSend_ResolvesTemplateRefsInToSubjectAndThreadID(t *testing.T) {
 		w.Write([]byte(`{"id":"sent3"}`))
 	}))
 	defer srv.Close()
-	nodes.SetGoogleAPIBasesForTest(srv.URL, "", "x", "x")
-	defer nodes.SetGoogleAPIBasesForTest("", "", "", "")
+	nodes.SetGoogleAPIBasesForTest(srv.URL, "", "x")
+	defer nodes.SetGoogleAPIBasesForTest("", "", "")
 
 	cfg, config := googleTestSetup(t, "u1")
 	config["gmailTo"] = "{{ node.lookup.email }}"
@@ -326,8 +222,8 @@ func TestGmailSend_StripsCRLFFromToAndSubject(t *testing.T) {
 		w.Write([]byte(`{"id":"sent4"}`))
 	}))
 	defer srv.Close()
-	nodes.SetGoogleAPIBasesForTest(srv.URL, "", "x", "x")
-	defer nodes.SetGoogleAPIBasesForTest("", "", "", "")
+	nodes.SetGoogleAPIBasesForTest(srv.URL, "", "x")
+	defer nodes.SetGoogleAPIBasesForTest("", "", "")
 
 	cfg, config := googleTestSetup(t, "u1")
 	config["gmailTo"] = "{{ node.lookup.email }}"
@@ -363,8 +259,8 @@ func TestGmailReply_PrefixesSubjectAndSetsThreadID(t *testing.T) {
 		w.Write([]byte(`{"id":"sent2"}`))
 	}))
 	defer srv.Close()
-	nodes.SetGoogleAPIBasesForTest(srv.URL, "", "x", "x")
-	defer nodes.SetGoogleAPIBasesForTest("", "", "", "")
+	nodes.SetGoogleAPIBasesForTest(srv.URL, "", "x")
+	defer nodes.SetGoogleAPIBasesForTest("", "", "")
 
 	cfg, config := googleTestSetup(t, "u1")
 	config["gmailTo"] = "sender@example.com"
@@ -392,8 +288,8 @@ func TestSheetsRead_ReturnsDecodedValues(t *testing.T) {
 		w.Write([]byte(`{"values":[["a","b"],["c","d"]]}`))
 	}))
 	defer srv.Close()
-	nodes.SetGoogleAPIBasesForTest("x", srv.URL, "x", "x")
-	defer nodes.SetGoogleAPIBasesForTest("", "", "", "")
+	nodes.SetGoogleAPIBasesForTest("x", srv.URL, "x")
+	defer nodes.SetGoogleAPIBasesForTest("", "", "")
 
 	cfg, config := googleTestSetup(t, "u1")
 	config["sheetsSpreadsheetID"] = "sheet123"
@@ -430,8 +326,8 @@ func TestSheetsRead_EncodesSpaceInRangeAsPathSegmentNotQueryString(t *testing.T)
 		w.Write([]byte(`{"values":[]}`))
 	}))
 	defer srv.Close()
-	nodes.SetGoogleAPIBasesForTest("x", srv.URL, "x", "x")
-	defer nodes.SetGoogleAPIBasesForTest("", "", "", "")
+	nodes.SetGoogleAPIBasesForTest("x", srv.URL, "x")
+	defer nodes.SetGoogleAPIBasesForTest("", "", "")
 
 	cfg, config := googleTestSetup(t, "u1")
 	config["sheetsSpreadsheetID"] = "sheet123"
@@ -457,8 +353,8 @@ func TestSheetsAppend_SingleCellRowForPlainTextMessage(t *testing.T) {
 		w.Write([]byte(`{}`))
 	}))
 	defer srv.Close()
-	nodes.SetGoogleAPIBasesForTest("x", srv.URL, "x", "x")
-	defer nodes.SetGoogleAPIBasesForTest("", "", "", "")
+	nodes.SetGoogleAPIBasesForTest("x", srv.URL, "x")
+	defer nodes.SetGoogleAPIBasesForTest("", "", "")
 
 	cfg, config := googleTestSetup(t, "u1")
 	config["sheetsSpreadsheetID"] = "sheet123"
@@ -489,8 +385,8 @@ func TestSheetsAppend_ArrayRowWhenMessageIsJSONArray(t *testing.T) {
 		w.Write([]byte(`{}`))
 	}))
 	defer srv.Close()
-	nodes.SetGoogleAPIBasesForTest("x", srv.URL, "x", "x")
-	defer nodes.SetGoogleAPIBasesForTest("", "", "", "")
+	nodes.SetGoogleAPIBasesForTest("x", srv.URL, "x")
+	defer nodes.SetGoogleAPIBasesForTest("", "", "")
 
 	cfg, config := googleTestSetup(t, "u1")
 	config["sheetsSpreadsheetID"] = "sheet123"
@@ -528,8 +424,8 @@ func TestCalendarList_ReturnsDecodedEvents(t *testing.T) {
 		w.Write([]byte(`{"items":[{"summary":"Meeting"}]}`))
 	}))
 	defer srv.Close()
-	nodes.SetGoogleAPIBasesForTest("x", "x", srv.URL, "x")
-	defer nodes.SetGoogleAPIBasesForTest("", "", "", "")
+	nodes.SetGoogleAPIBasesForTest("x", "x", srv.URL)
+	defer nodes.SetGoogleAPIBasesForTest("", "", "")
 
 	cfg, config := googleTestSetup(t, "u1")
 	node := models.WorkflowNode{ID: "g13", Type: models.NodeTypeGoogle, Template: "calendar_list", Config: config}
@@ -555,8 +451,8 @@ func TestCalendarCreate_SendsSummaryAndTimes(t *testing.T) {
 		w.Write([]byte(`{"id":"evt1"}`))
 	}))
 	defer srv.Close()
-	nodes.SetGoogleAPIBasesForTest("x", "x", srv.URL, "x")
-	defer nodes.SetGoogleAPIBasesForTest("", "", "", "")
+	nodes.SetGoogleAPIBasesForTest("x", "x", srv.URL)
+	defer nodes.SetGoogleAPIBasesForTest("", "", "")
 
 	cfg, config := googleTestSetup(t, "u1")
 	config["calendarSummary"] = "Team Sync"
@@ -592,64 +488,26 @@ func TestCalendarCreate_SkipsWhenMissingTimes(t *testing.T) {
 	}
 }
 
-func TestDriveList_ReturnsDecodedFiles(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Write([]byte(`{"files":[{"id":"f1","name":"report.pdf"}]}`))
-	}))
-	defer srv.Close()
-	nodes.SetGoogleAPIBasesForTest("x", "x", "x", srv.URL)
-	defer nodes.SetGoogleAPIBasesForTest("", "", "", "")
-
-	cfg, config := googleTestSetup(t, "u1")
-	node := models.WorkflowNode{ID: "g16", Type: models.NodeTypeGoogle, Template: "drive_list", Config: config}
+// gmail_list/gmail_get and the Drive nodes were removed with their Google
+// restricted scopes. Workflows saved before that still hold such nodes; they
+// must fail with a reason a user can act on, before any token is fetched.
+func TestExecuteGoogle_RemovedTemplatesExplainThemselves(t *testing.T) {
+	// No oauthCredentialID in Config: a removed node must explain itself
+	// rather than ask the user to connect an account it can never use.
+	cfg, _ := googleTestSetup(t, "u1")
+	config := map[string]string{}
 	rc := engine.NewRunContext("r1", nil)
-
-	result, err := nodes.ExecuteGoogle(context.Background(), node, rc, cfg)
-	if err != nil {
-		t.Fatal(err)
-	}
-	m, ok := result.(map[string]any)
-	if !ok || m["files"] == nil {
-		t.Errorf("want decoded files, got %v", result)
-	}
-}
-
-func TestDriveGet_SkipsWhenNoFileID(t *testing.T) {
-	cfg, config := googleTestSetup(t, "u1")
-	node := models.WorkflowNode{ID: "g17", Type: models.NodeTypeGoogle, Template: "drive_get", Config: config}
-	rc := engine.NewRunContext("r1", nil)
-	result, err := nodes.ExecuteGoogle(context.Background(), node, rc, cfg)
-	if err != nodes.ErrActionSkipped || result != "drive_skipped_no_file_id" {
-		t.Errorf("want skip sentinel, got %v / %v", result, err)
-	}
-}
-
-func TestDriveDownload_ReturnsBase64Content(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Query().Get("alt") != "media" {
-			t.Errorf("want alt=media query param, got %q", r.URL.RawQuery)
+	for _, tc := range []struct{ template, want string }{
+		{"gmail_list", "Gmail read access"},
+		{"gmail_get", "Gmail read access"},
+		{"drive_list", "Drive access"},
+		{"drive_get", "Drive access"},
+		{"drive_download", "Drive access"},
+	} {
+		node := models.WorkflowNode{ID: "rm", Type: models.NodeTypeGoogle, Template: tc.template, Config: config}
+		_, err := nodes.ExecuteGoogle(context.Background(), node, rc, cfg)
+		if err == nil || !strings.Contains(err.Error(), "removed") || !strings.Contains(err.Error(), tc.want) {
+			t.Errorf("%s: want a 'removed ... %s' error, got %v", tc.template, tc.want, err)
 		}
-		w.Write([]byte("raw file bytes"))
-	}))
-	defer srv.Close()
-	nodes.SetGoogleAPIBasesForTest("x", "x", "x", srv.URL)
-	defer nodes.SetGoogleAPIBasesForTest("", "", "", "")
-
-	cfg, config := googleTestSetup(t, "u1")
-	config["driveFileID"] = "file123"
-	node := models.WorkflowNode{ID: "g18", Type: models.NodeTypeGoogle, Template: "drive_download", Config: config}
-	rc := engine.NewRunContext("r1", nil)
-
-	result, err := nodes.ExecuteGoogle(context.Background(), node, rc, cfg)
-	if err != nil {
-		t.Fatal(err)
-	}
-	m, ok := result.(map[string]any)
-	if !ok {
-		t.Fatalf("want a map result, got %T", result)
-	}
-	decoded, err := base64.StdEncoding.DecodeString(m["contentBase64"].(string))
-	if err != nil || string(decoded) != "raw file bytes" {
-		t.Errorf("want base64-encoded file content round-tripping, got %v (err %v)", m["contentBase64"], err)
 	}
 }

@@ -42,6 +42,7 @@ const tendrilRentGateFeeAtomic int64 = 10_000
 // maxTendrilHours caps a single rent. At $6/hr a fat-fingered "100" would
 // commit $600 of real mainnet USDC in one click.
 const maxTendrilHours = 24.0
+const autoRentDefaultBudgetUSD = 1.0
 
 // RequiredCreditAtomic is how much of THIS USER's Tendril credit a rent
 // reserves for metered hourly time. Not the pool's balance — the pool is a
@@ -121,6 +122,21 @@ func parseCoverHours(raw string) (float64, error) {
 	return parseHours(raw)
 }
 
+func parseAutoBudgetUSD(raw string) (float64, error) {
+	s := strings.TrimSpace(raw)
+	if s == "" {
+		return autoRentDefaultBudgetUSD, nil
+	}
+	v, err := strconv.ParseFloat(s, 64)
+	if err != nil {
+		return 0, fmt.Errorf("tendril: auto budget %q is not a number", raw)
+	}
+	if math.IsNaN(v) || math.IsInf(v, 0) || v <= 0 || v > maxTendrilMinBalanceUSD {
+		return 0, fmt.Errorf("tendril: auto budget must be finite and between 0 and 1000000 USD, got %v", v)
+	}
+	return v, nil
+}
+
 // TendrilStore is the slice of *db.Store this package needs, as an interface
 // so tests can drive the executor without a database.
 type TendrilStore interface {
@@ -137,6 +153,7 @@ type TendrilStore interface {
 	// only thing left to resolve against is "whichever machine this user
 	// currently has open."
 	LatestActiveLeaseForUser(ctx context.Context, userID string) (models.TendrilLease, error)
+	ListActiveTendrilLeases(ctx context.Context, userID string) ([]models.TendrilLease, error)
 	// Credit sub-ledger (Task 6) — the authority on what THIS user may spend.
 	TendrilCreditBalance(ctx context.Context, userID string) (int64, error)
 	CreditBalance(ctx context.Context, userID string) (int64, error)
@@ -163,6 +180,8 @@ func ExecuteTendril(ctx context.Context, node models.WorkflowNode, rc RunContext
 		return executeTendrilTopup(ctx, node, cfg)
 	case "run":
 		return executeTendrilRun(ctx, node, rc, cfg)
+	case "auto":
+		return executeTendrilAuto(ctx, node, rc, cfg)
 	case "release":
 		return executeTendrilRelease(ctx, node, cfg)
 	default:
@@ -239,13 +258,17 @@ func executeTendrilTopup(ctx context.Context, node models.WorkflowNode, cfg Tend
 		}
 	}
 
+	return performTopup(ctx, cfg, atomic, balance, coverHours > 0, 0)
+}
+
+func performTopup(ctx context.Context, cfg TendrilConfig, atomic, balance int64, allowMinimum bool, maxTopup int64) (map[string]any, error) {
 	// Tendril's own bounds, read live rather than hardcoded.
 	platform, err := cfg.Client.Platform(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("tendril: platform: %w", err)
 	}
 	if platform.MinTopUpAtomic > 0 && atomic < platform.MinTopUpAtomic {
-		if coverHours <= 0 {
+		if !allowMinimum {
 			return nil, fmt.Errorf("tendril: minimum topup is %s", formatUSDCAmount(platform.MinTopUpAtomic))
 		}
 		// A computed shortfall can fall under Tendril's floor; buying the
@@ -254,6 +277,10 @@ func executeTendrilTopup(ctx context.Context, node models.WorkflowNode, cfg Tend
 	}
 	if platform.MaxTopUpAtomic > 0 && atomic > platform.MaxTopUpAtomic {
 		return nil, fmt.Errorf("tendril: maximum topup is %s", formatUSDCAmount(platform.MaxTopUpAtomic))
+	}
+
+	if maxTopup > 0 && atomic > maxTopup {
+		return nil, fmt.Errorf("tendril: automatic topup of %s exceeds the %s budget", formatUSDCAmount(atomic), formatUSDCAmount(maxTopup))
 	}
 
 	// Refuse before paying if the user cannot afford it. Settling first and
@@ -321,28 +348,43 @@ func executeTendrilRent(ctx context.Context, node models.WorkflowNode, cfg Tendr
 	if err != nil {
 		return nil, err
 	}
+	machine, err := pickMachine(ctx, cfg, node.TendrilNodeID)
+	if err != nil {
+		return nil, err
+	}
+	out, _, err := performRent(ctx, node, cfg, machine, hours)
+	return out, err
+}
 
+// pickMachine is OnlineNodes filtered down to one: the cheapest online
+// machine, or the one node.TendrilNodeID names if it's still online. Shared
+// by the explicit rent action and the auto action, which only differs in how
+// it decides hours to rent.
+func pickMachine(ctx context.Context, cfg TendrilConfig, nodeID string) (tendril.Node, error) {
 	machines, err := cfg.Client.OnlineNodes(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("tendril: market: %w", err)
+		return tendril.Node{}, fmt.Errorf("tendril: market: %w", err)
 	}
 	if len(machines) == 0 {
-		return nil, fmt.Errorf("tendril: no machines are online right now")
+		return tendril.Node{}, fmt.Errorf("tendril: no machines are online right now")
 	}
 	machine := machines[0] // cheapest, per OnlineNodes' ordering
-	if node.TendrilNodeID != "" {
+	if nodeID != "" {
 		found := false
 		for _, m := range machines {
-			if m.ID == node.TendrilNodeID {
+			if m.ID == nodeID {
 				machine, found = m, true
 				break
 			}
 		}
 		if !found {
-			return nil, fmt.Errorf("tendril: machine %q is not online", node.TendrilNodeID)
+			return tendril.Node{}, fmt.Errorf("tendril: machine %q is not online", nodeID)
 		}
 	}
+	return machine, nil
+}
 
+func performRent(ctx context.Context, node models.WorkflowNode, cfg TendrilConfig, machine tendril.Node, hours float64) (map[string]any, models.TendrilLease, error) {
 	// Reserve the hours against THIS user's Tendril credit. The shared Wallet 2
 	// pool is deliberately not consulted: it holds every user's topups at once,
 	// so checking it would let one user rent on hours somebody else bought.
@@ -350,10 +392,10 @@ func executeTendrilRent(ctx context.Context, node models.WorkflowNode, cfg Tendr
 	need := RequiredCreditAtomic(machine.RateUSDMicrosPerHour(), hours)
 	userCredit, err := cfg.Store.TendrilCreditBalance(ctx, cfg.UserID)
 	if err != nil {
-		return nil, err
+		return nil, models.TendrilLease{}, err
 	}
 	if userCredit < need {
-		return nil, fmt.Errorf(
+		return nil, models.TendrilLease{}, fmt.Errorf(
 			"tendril: %v hour(s) on %s costs %s but your Tendril credit is %s — add more Tendril credit first",
 			hours, machine.ID, formatUSDCAmount(need), formatUSDCAmount(userCredit))
 	}
@@ -365,15 +407,15 @@ func executeTendrilRent(ctx context.Context, node models.WorkflowNode, cfg Tendr
 	gateFeeRealCost := tendrilRentGateFeeAtomic + models.X402PlatformFeeUSDMicros
 	agentMeshBalance, err := cfg.Store.CreditBalance(ctx, cfg.UserID)
 	if err != nil {
-		return nil, err
+		return nil, models.TendrilLease{}, err
 	}
 	if agentMeshBalance < gateFeeRealCost {
-		return nil, fmt.Errorf(
+		return nil, models.TendrilLease{}, fmt.Errorf(
 			"tendril: opening a lease needs %s in AgentMesh credits for the gate fee, you have %s",
 			formatUSDCAmount(gateFeeRealCost), formatUSDCAmount(agentMeshBalance))
 	}
 	if err := cfg.Store.ChargeTendrilCredit(ctx, cfg.UserID, "", "charge", need); err != nil {
-		return nil, fmt.Errorf("tendril: reserve credit: %w", err)
+		return nil, models.TendrilLease{}, fmt.Errorf("tendril: reserve credit: %w", err)
 	}
 	// From here on the user has paid; any failure below must hand the
 	// reservation back rather than silently keeping it.
@@ -390,30 +432,30 @@ func executeTendrilRent(ctx context.Context, node models.WorkflowNode, cfg Tendr
 	// pool cannot cover what users have collectively bought, the invariant has
 	// been violated upstream and renting would silently fail at Tendril's end.
 	if poolBalance, perr := cfg.Session.Balance(ctx); perr == nil && poolBalance < need {
-		return nil, fmt.Errorf("tendril: the platform pool is short (%s available, %s needed) — this is a platform-side problem, not yours; no credit was spent",
+		return nil, models.TendrilLease{}, fmt.Errorf("tendril: the platform pool is short (%s available, %s needed) — this is a platform-side problem, not yours; no credit was spent",
 			formatUSDCAmount(poolBalance), formatUSDCAmount(need))
 	}
 
 	sshPub, sshPriv, err := sshkeys.Generate()
 	if err != nil {
-		return nil, fmt.Errorf("tendril: ssh keygen: %w", err)
+		return nil, models.TendrilLease{}, fmt.Errorf("tendril: ssh keygen: %w", err)
 	}
 	body, _ := json.Marshal(map[string]string{"sshPubKey": sshPub})
 	raw, err := payTendril(ctx, cfg, "/x402/rent?nodeId="+machine.ID, body, "")
 	if err != nil {
-		return nil, err
+		return nil, models.TendrilLease{}, err
 	}
 	// Same proof-of-settlement requirement as executeTendrilTopup: a
 	// non-402 response from Tendril (outage, maintenance page, proxy
 	// error) otherwise looks like a successful call with nothing paid --
 	// refuse to persist a lease and spend the reservation on one.
 	if raw.SettledUSDMicros <= 0 {
-		return nil, fmt.Errorf("tendril: rent did not settle (no payment confirmed) -- nothing was charged, try again")
+		return nil, models.TendrilLease{}, fmt.Errorf("tendril: rent did not settle (no payment confirmed) -- nothing was charged, try again")
 	}
 
 	lease, err := decodeRentResponse(raw.Response)
 	if err != nil {
-		return nil, err
+		return nil, models.TendrilLease{}, err
 	}
 
 	// From here on we hold a real, known lease id and token: the machine is
@@ -443,16 +485,16 @@ func executeTendrilRent(ctx context.Context, node models.WorkflowNode, cfg Tendr
 
 	tokenEnc, err := wallet.Encrypt(lease.LeaseToken, cfg.EncryptKey)
 	if err != nil {
-		return nil, fmt.Errorf("tendril: encrypt lease token: %w", err)
+		return nil, models.TendrilLease{}, fmt.Errorf("tendril: encrypt lease token: %w", err)
 	}
 	keyEnc, err := wallet.Encrypt(sshPriv, cfg.EncryptKey)
 	if err != nil {
-		return nil, fmt.Errorf("tendril: encrypt ssh key: %w", err)
+		return nil, models.TendrilLease{}, fmt.Errorf("tendril: encrypt ssh key: %w", err)
 	}
 	passwordEnc := ""
 	if lease.SSH.Password != "" {
 		if passwordEnc, err = wallet.Encrypt(lease.SSH.Password, cfg.EncryptKey); err != nil {
-			return nil, fmt.Errorf("tendril: encrypt ssh password: %w", err)
+			return nil, models.TendrilLease{}, fmt.Errorf("tendril: encrypt ssh password: %w", err)
 		}
 	}
 
@@ -474,7 +516,7 @@ func executeTendrilRent(ctx context.Context, node models.WorkflowNode, cfg Tendr
 		FundedUntil:          fundedUntil,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("tendril: persist lease: %w", err)
+		return nil, models.TendrilLease{}, fmt.Errorf("tendril: persist lease: %w", err)
 	}
 	// The lease is durably recorded -- stop the compensating Release above
 	// from firing, and stop the deferred refund from clawing back a
@@ -505,7 +547,7 @@ func executeTendrilRent(ctx context.Context, node models.WorkflowNode, cfg Tendr
 			}
 		}
 	}
-	return out, nil
+	return out, saved, nil
 }
 
 type rentResponse struct {
@@ -815,4 +857,94 @@ func executeTendrilRun(ctx context.Context, node models.WorkflowNode, rc RunCont
 		return nil, err
 	}
 	return res.Response, nil
+}
+
+func executeTendrilAuto(ctx context.Context, node models.WorkflowNode, rc RunContexter, cfg TendrilConfig) (any, error) {
+	payload := strings.TrimSpace(rc.Message())
+	for _, p := range node.CustomParams {
+		if p.Name == "payload" && strings.TrimSpace(p.Value) != "" {
+			payload = p.Value
+		}
+	}
+	if payload == "" {
+		return nil, fmt.Errorf("tendril: auto needs a payload ,  set one on the node or pass it as the run's input")
+	}
+
+	var leaseToken string
+	var rented map[string]any
+
+	leases, err := cfg.Store.ListActiveTendrilLeases(ctx, cfg.UserID)
+	if err != nil {
+		return nil, fmt.Errorf("tendril: list active leases for auto: %w", err)
+	}
+	now := time.Now()
+	// The store orders newest first; eligibility must precede selection.
+	for _, lease := range leases {
+		if lease.UserID != cfg.UserID || lease.Status != "active" ||
+			(node.TendrilNodeID != "" && node.TendrilNodeID != lease.TendrilNodeID) ||
+			lease.StartedAt.IsZero() || !lease.FundedUntil.After(now) ||
+			lease.HoursPurchased <= 0 || math.IsNaN(lease.HoursPurchased) || math.IsInf(lease.HoursPurchased, 0) {
+			continue
+		}
+		// Shared-pool funding can outlive the time this user purchased.
+		elapsedHours := now.Sub(lease.StartedAt).Hours()
+		if elapsedHours < 0 || elapsedHours >= lease.HoursPurchased {
+			continue
+		}
+		if tok, derr := wallet.Decrypt(lease.LeaseTokenEnc, cfg.EncryptKey); derr == nil && tok != "" {
+			leaseToken = tok
+			break
+		}
+	}
+
+	if leaseToken == "" {
+		budgetUSD, err := parseAutoBudgetUSD(node.TendrilAmount)
+		if err != nil {
+			return nil, err
+		}
+		machine, err := pickMachine(ctx, cfg, node.TendrilNodeID)
+		if err != nil {
+			return nil, err
+		}
+		if machine.PricePerHourUSD <= 0 || math.IsNaN(machine.PricePerHourUSD) || math.IsInf(machine.PricePerHourUSD, 0) {
+			return nil, fmt.Errorf("tendril: machine %s has no valid rate", machine.ID)
+		}
+		hours := budgetUSD / machine.PricePerHourUSD
+		if hours > maxTendrilHours {
+			hours = maxTendrilHours
+		}
+
+		need := RequiredCreditAtomic(machine.RateUSDMicrosPerHour(), hours)
+		userCredit, err := cfg.Store.TendrilCreditBalance(ctx, cfg.UserID)
+		if err != nil {
+			return nil, err
+		}
+		if userCredit < need {
+			budgetAtomic := int64(budgetUSD*1e6 + 0.5)
+			if _, err := performTopup(ctx, cfg, need-userCredit, userCredit, true, budgetAtomic); err != nil {
+				return nil, fmt.Errorf("tendril: auto topup: %w", err)
+			}
+		}
+
+		out, saved, err := performRent(ctx, node, cfg, machine, hours)
+		if err != nil {
+			return nil, err
+		}
+		rented = out
+		tok, derr := wallet.Decrypt(saved.LeaseTokenEnc, cfg.EncryptKey)
+		if derr != nil {
+			return nil, fmt.Errorf("tendril: decrypt new lease token: %w", derr)
+		}
+		leaseToken = tok
+	}
+
+	body, _ := json.Marshal(map[string]string{"payload": payload})
+	res, err := payTendril(ctx, cfg, "/x402/run", body, leaseToken)
+	if err != nil {
+		return nil, err
+	}
+	if rented == nil {
+		return res.Response, nil
+	}
+	return map[string]any{"rented": rented, "output": res.Response}, nil
 }

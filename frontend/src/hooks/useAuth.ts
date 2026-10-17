@@ -7,10 +7,51 @@ import {
   getAuthToken,
   authReady,
 } from "@/lib/nativeAuth";
-import { resetCredits } from "@/lib/credits/store";
+import { resetCredits, setAccountThreshold } from "@/lib/credits/store";
+import { clearDeletedAccountStorage } from "@/lib/accountDeletion";
 
 const UI_COOKIE = "agentmesh_ui";
 const TTL = 60 * 60 * 24 * 7; // 7 days -- matches backend JWT TTL
+
+type AccountEvent = { kind: "profile"; id: string; patch: Partial<AuthUser> } |
+  { kind: "session"; signedIn: boolean };
+const accountListeners = new Set<(event: AccountEvent) => void>();
+type ProfileStamp = { revision: number; value: AuthUser[keyof AuthUser] };
+const profileUpdates = new Map<string, Partial<Record<keyof AuthUser, ProfileStamp>>>();
+let profileRevision = 0;
+let accountRevision = 0;
+
+export function getAccountRevision(): number { return accountRevision; }
+
+function changeLocalAccount(signedIn: boolean) {
+  accountRevision++;
+  profileUpdates.clear();
+  accountListeners.forEach((listener) => listener({ kind: "session", signedIn }));
+}
+
+function publishProfile(id: string, patch: Partial<AuthUser>) {
+  const updates = profileUpdates.get(id) ?? {};
+  const revision = ++profileRevision;
+  for (const [key, value] of Object.entries(patch)) {
+    updates[key as keyof AuthUser] = { revision, value };
+  }
+  profileUpdates.set(id, updates);
+  accountListeners.forEach((listener) => listener({ kind: "profile", id, patch }));
+}
+
+function applyPendingProfileUpdates(user: AuthUser, since: number): AuthUser {
+  const patch: Partial<AuthUser> = {};
+  for (const [key, stamp] of Object.entries(profileUpdates.get(user.id) ?? {})) {
+    if (stamp && stamp.revision > since) Object.assign(patch, { [key]: stamp.value });
+  }
+  return { ...user, ...patch };
+}
+
+export function publishAccountThreshold(id: string, micros: number, revision: number) {
+  if (revision !== accountRevision) return;
+  publishProfile(id, { lowBalanceUsdMicros: micros });
+  setAccountThreshold(id, micros);
+}
 
 function setUICookie() {
   document.cookie = `${UI_COOKIE}=1; Path=/; SameSite=Lax; Max-Age=${TTL}`;
@@ -85,6 +126,20 @@ export function useAuth() {
   const sessionEpoch = useRef(0);
 
   useEffect(() => {
+    const listener = (event: AccountEvent) => {
+      if (event.kind === "profile") {
+        setUser((previous) => previous?.id === event.id ? { ...previous, ...event.patch } : previous);
+      } else {
+        setUser(null);
+        setSignedIn(event.signedIn);
+        setOffline(false);
+      }
+    };
+    accountListeners.add(listener);
+    return () => { accountListeners.delete(listener); };
+  }, []);
+
+  useEffect(() => {
     let cancelled = false;
     // The session as it stood when this check went out. AuthPage mounts this
     // hook and lets the form be submitted while its own check is still in
@@ -92,6 +147,8 @@ export function useAuth() {
     // succeeded. Acting on it then cleared the cookie the sign-in had just
     // written, and middleware sent the signed-in user back to /signin.
     const epoch = sessionEpoch.current;
+    const revision = accountRevision;
+    let profileReadVersion = profileRevision;
     // The token this check is made with. A rejection is about this one only:
     // a sign-in can replace it before the answer arrives.
     let sent: string | null = null;
@@ -102,19 +159,22 @@ export function useAuth() {
     authReady
       .then(() => {
         sent = getAuthToken();
+        profileReadVersion = profileRevision;
         return auth.me();
       })
       .then((u) => {
-        if (cancelled || epoch !== sessionEpoch.current) return;
+        if (cancelled || epoch !== sessionEpoch.current || revision !== accountRevision) return;
         setUICookie();
         setOffline(false);
         setSignedIn(true);
-        setUser(u);
+        const current = applyPendingProfileUpdates(u, profileReadVersion);
+        setUser(current);
+        if (current.lowBalanceUsdMicros !== undefined) setAccountThreshold(current.id, current.lowBalanceUsdMicros);
       })
       .catch((err) => {
         // A session started or ended since: this answer describes a session
         // that is no longer the current one and must change nothing.
-        if (cancelled || epoch !== sessionEpoch.current) return;
+        if (cancelled || epoch !== sessionEpoch.current || revision !== accountRevision) return;
         // A check that never got an answer says nothing about the session.
         // Treating it as signed out sent a signed-in user to the sign-in
         // screen whenever the phone was offline or the server was down.
@@ -172,6 +232,8 @@ export function useAuth() {
     // not keep the token, so the two lines below are not reached.
     if (token && IS_NATIVE) await persistNativeSession(token);
     sessionEpoch.current += 1;
+    changeLocalAccount(true);
+    resetCredits();
     setUICookie();
     setSignedIn(true);
   }, []);
@@ -181,20 +243,23 @@ export function useAuth() {
       const token = await auth.signUp(email, password, name, org);
       if (token && IS_NATIVE) await persistNativeSession(token);
       sessionEpoch.current += 1;
+      changeLocalAccount(true);
+      resetCredits();
       setUICookie();
       setSignedIn(true);
     },
     [],
   );
 
-  const clearLocalSession = useCallback(() => {
+  const clearLocalSession = useCallback((notifyNative = true) => {
     sessionEpoch.current += 1;
+    changeLocalAccount(false);
     if (IS_NATIVE) {
       setAuthToken(null);
       // Logged for the mirror-image reason: a shared device that fails to
       // clear the persisted token would otherwise silently keep the old
       // user's session live in Keystore after the UI has already moved on.
-      void import("@/native")
+      if (notifyNative) void import("@/native")
         .then(({ shell }) => shell.onSignedOut())
         .catch((err) =>
           console.error("native shell failed to clear sign-out", err),
@@ -230,13 +295,38 @@ export function useAuth() {
     }
   }, [clearLocalSession]);
 
+  const deleteAccount = useCallback(async (confirmation: string, password: string) => {
+    const token = getAuthToken();
+    await auth.deleteAccount(confirmation, password);
+    clearLocalSession(false);
+    const cleanup = await Promise.allSettled([
+      Promise.resolve().then(clearDeletedAccountStorage),
+      ...(IS_NATIVE ? [import("@/native/deletion").then(({ clearDeletedAccount }) => clearDeletedAccount(token))] : []),
+    ]);
+    for (const result of cleanup) {
+      if (result.status === "rejected") console.error("account deleted; device cleanup incomplete", result.reason);
+    }
+    return cleanup.some((result) => result.status === "rejected");
+  }, [clearLocalSession]);
+
   // Completes the post-OAuth onboarding prompt (or a later profile edit) —
   // updates the backend then reflects it locally so callers don't need a
   // full re-fetch just to clear needsOnboarding.
   const completeOnboarding = useCallback(async (name: string, org: string) => {
+    const revision = accountRevision;
+    const owner = user?.id;
     const updated = await auth.updateProfile(name, org);
-    setUser(updated);
-  }, []);
+    if (revision !== accountRevision || (owner && updated.id !== owner)) return;
+    const patch = {
+      name: updated.name,
+      orgName: updated.orgName,
+      needsOnboarding: updated.needsOnboarding,
+      ...(updated.hasPassword !== undefined ? { hasPassword: updated.hasPassword } : {}),
+      ...(updated.createdAt !== undefined ? { createdAt: updated.createdAt } : {}),
+    };
+    publishProfile(updated.id, patch);
+    setUser((previous) => ({ ...(previous?.id === updated.id ? previous : updated), ...patch }));
+  }, [user?.id]);
 
   return {
     signedIn,
@@ -247,6 +337,7 @@ export function useAuth() {
     signIn,
     signUp,
     signOut,
+    deleteAccount,
     completeOnboarding,
   };
 }

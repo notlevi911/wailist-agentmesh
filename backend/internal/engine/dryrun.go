@@ -83,6 +83,9 @@ func DryRun(ctx context.Context, graph models.WorkflowGraph, opts DryRunOptions)
 		inputJSON, _ = json.Marshal(map[string]string{"message": opts.Input})
 	}
 	rc := NewRunContext("dry-run", inputJSON)
+	// Same per-node message resolution as a run (see nodeRunContext), so a
+	// test run checks what each step would really receive.
+	msgPreds := messagePredecessors(levels, graph.Edges)
 	if opts.State != nil {
 		rc.SetState(opts.State)
 	}
@@ -108,7 +111,8 @@ func DryRun(ctx context.Context, graph models.WorkflowGraph, opts DryRunOptions)
 			}
 			step := nodes.DryRunStep{NodeID: n.ID, Name: n.Name, Type: string(n.Type), Template: n.Template}
 			source, tainted := fedBySimulated[n.ID]
-			out, reason, err := dryRunNode(ctx, n, attachMap[n.ID], rc, opts)
+			nrc := rc.forNode(msgPreds[n.ID])
+			out, reason, err := dryRunNode(ctx, n, attachMap[n.ID], nrc, opts)
 			var u unverifiable
 			switch {
 			case errors.As(err, &u):
@@ -165,7 +169,7 @@ func DryRun(ctx context.Context, graph models.WorkflowGraph, opts DryRunOptions)
 			var pending carry
 			var sends bool
 			if reason != "" {
-				pending, sends = simulatedCarry(n, out, rc)
+				pending, sends = simulatedCarry(n, out, nrc)
 			}
 			rc.Set(n.ID, out)
 			step.Output = clipOutput(out)
@@ -249,7 +253,7 @@ func DryRun(ctx context.Context, graph models.WorkflowGraph, opts DryRunOptions)
 
 // dryRunNode runs or simulates one node. A non-empty reason means it was
 // simulated.
-func dryRunNode(ctx context.Context, n models.WorkflowNode, attach models.AttachConfig, rc *RunContext, opts DryRunOptions) (any, string, error) {
+func dryRunNode(ctx context.Context, n models.WorkflowNode, attach models.AttachConfig, rc *nodeRunContext, opts DryRunOptions) (any, string, error) {
 	if ok, reason := nodes.DryRunExecutes(n); !ok {
 		sim := map[string]any{"simulated": true, "reason": reason}
 		if n.Type == models.NodeTypeAction || n.Type == models.NodeTypeGoogle {
@@ -384,7 +388,7 @@ var actionsWithoutMessage = map[string]bool{
 // would flag a correct workflow as an empty send.
 //
 // Must be called before the step's own output is Set on rc.
-func simulatedCarry(n models.WorkflowNode, out any, rc *RunContext) (carry, bool) {
+func simulatedCarry(n models.WorkflowNode, out any, rc *nodeRunContext) (carry, bool) {
 	switch n.Type {
 	case models.NodeTypeAction:
 		if actionsWithoutMessage[n.Template] {

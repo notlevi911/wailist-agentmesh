@@ -22,6 +22,7 @@ export interface NativeGeofence {
     radiusM: number;
   }): Promise<void>;
   removeGeofence(opts: { id: string }): Promise<void>;
+  clearAccountData(): Promise<void>;
   hasPermission(): Promise<PermissionResult>;
   /** Requests foreground then background, in that order -- Android requires it. */
   requestPermission(): Promise<PermissionResult>;

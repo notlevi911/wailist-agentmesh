@@ -50,7 +50,7 @@ export interface EncodedFile {
 export async function readFileAsBase64(file: File): Promise<EncodedFile> {
   if (file.size > MAX_PARAM_FILE_BYTES) {
     throw new Error(
-      `${file.name} is ${formatFileSize(file.size)} — the limit is ${formatFileSize(MAX_PARAM_FILE_BYTES)}.`,
+      `${file.name} is ${formatFileSize(file.size)}: the limit is ${formatFileSize(MAX_PARAM_FILE_BYTES)}.`,
     );
   }
   const bytes = new Uint8Array(await file.arrayBuffer());

@@ -63,7 +63,8 @@ type Runner struct {
 	// payment at the end of Run -- see addRunBilling and settleRunTotal.
 	// Real tool402 spend is deliberately excluded (see addRunBilling's own
 	// filtering): it already gets its own on-chain settlement.
-	runBilling sync.Map
+	runBilling     sync.Map
+	runSpendLimits sync.Map
 }
 
 func NewRunner(
@@ -160,27 +161,117 @@ func (r *Runner) preflightCheck(ctx context.Context, wf models.Workflow, amountU
 // billing decision was reached, and forwarding the driver's text would put
 // connection-string detail into a run log the user reads.
 var errBillingCheckFailed = errors.New("the billing check could not be completed")
+var errCallSpendLimit = errors.New("call exceeds your per-call spend limit")
+
+type spendLimitKey struct{ owner, run string }
+type runSpendLimit struct {
+	mu      sync.Mutex
+	loaded  bool
+	ceiling *int64
+}
+
+func (r *Runner) trackSpendLimit(wf models.Workflow, run models.Run) func() {
+	key := spendLimitKey{wf.UserID, run.ID}
+	r.runSpendLimits.Store(key, &runSpendLimit{})
+	return func() { r.runSpendLimits.Delete(key) }
+}
+
+func (r *Runner) checkCallSpend(ctx context.Context, wf models.Workflow, run models.Run, amount int64) error {
+	if amount < 0 {
+		return errBillingCheckFailed
+	}
+	if amount == 0 {
+		return nil
+	}
+	limit := &runSpendLimit{}
+	if cached, ok := r.runSpendLimits.Load(spendLimitKey{wf.UserID, run.ID}); ok {
+		limit = cached.(*runSpendLimit)
+	}
+	limit.mu.Lock()
+	defer limit.mu.Unlock()
+	if !limit.loaded {
+		settings, err := r.store.GetUserSettings(ctx, wf.UserID)
+		if err != nil {
+			return errBillingCheckFailed
+		}
+		limit.ceiling = settings.MaxCallSpendUSDMicros
+		limit.loaded = true
+	}
+	if limit.ceiling != nil && amount > *limit.ceiling {
+		return fmt.Errorf("%w: charge %d USD micros, limit %d", errCallSpendLimit, amount, *limit.ceiling)
+	}
+	return nil
+}
+
+// The vendor pool excludes markup, but the user's limit covers the full charge.
+func (r *Runner) limitFundedLedger(wf models.Workflow, run models.Run, ledger nodes.PaymentLedger) nodes.PaymentLedger {
+	reserve := ledger.Reserve
+	ledger.Reserve = func(ctx context.Context, amount int64) error {
+		if amount < 0 || amount > math.MaxInt64-models.X402PlatformFeeUSDMicros {
+			return errBillingCheckFailed
+		}
+		if err := r.checkCallSpend(ctx, wf, run, amount+models.X402PlatformFeeUSDMicros); err != nil {
+			return err
+		}
+		return reserve(ctx, amount)
+	}
+	return ledger
+}
 
 func isBillingRefusal(err error) bool {
 	var blocked *nodes.ErrBalanceBlocked
 	return errors.Is(err, db.ErrInsufficientCredits) ||
+		errors.Is(err, errCallSpendLimit) ||
 		errors.Is(err, errBillingCheckFailed) ||
 		errors.As(err, &blocked)
 }
 
-// debitOrLog charges amountUSDMicros against wf.UserID for nodeID and just
-// logs on failure rather than failing the node — the node already ran
-// successfully by the time this is called, so there's nothing left to roll
-// back (x402 payments in particular can't be undone once sent on-chain).
-func (r *Runner) debitOrLog(ctx context.Context, wf models.Workflow, run models.Run, nodeID string, amountUSDMicros int64, kind string) {
-	if err := r.store.DebitCredits(ctx, wf.UserID, amountUSDMicros, kind, wf.ID, run.ID, nodeID); err != nil {
-		log.Printf("debit failed: user=%s workflow=%s run=%s node=%s kind=%s amount=%d: %v",
-			wf.UserID, wf.ID, run.ID, nodeID, kind, amountUSDMicros, err)
-		return // the DB was never actually charged -- don't settle it on-chain either
+// withReservedFlatFee runs exec for a standalone billable node (an "http"
+// Tool, an Action/connector, or a Google node) with its BYOK flat fee
+// reserved against wf.UserID BEFORE exec makes any real request, then
+// commits the fee if exec succeeds or releases it if exec fails.
+//
+// This replaces the old check-then-debit shape (preflightCheck, run the
+// node, debit afterwards), which left the node's whole real side effect in
+// an unlocked window: sibling nodes at the same topology level run in
+// parallel goroutines, so two of them could both pass the read-only balance
+// check, both fire their request, and only one debit would ever land (#31).
+// Reserving up front uses the same atomic decrement (ReserveCredits) and
+// the same Commit/Release closures agent-attached flat-fee calls already
+// use via X402RelayConfig.FlatFeeLedger, so a node that runs standalone is
+// billed identically to one an agent calls.
+//
+// When billable is false exec simply runs, unbilled. Any error from exec --
+// including nodes.ErrActionSkipped, which callers translate into a
+// successful, unbilled skip -- releases the reservation, so failed or
+// skipped work is never charged. The release is deferred, so a panic in
+// exec cannot strand the reserved fee either.
+func (r *Runner) withReservedFlatFee(ctx context.Context, wf models.Workflow, run models.Run, nodeID string, billable bool, exec func() (any, error)) (any, error) {
+	if !billable {
+		return exec()
 	}
-	// Always a BYOK flat fee (the only kind debitOrLog is ever called with),
-	// never a tool402 kind -- safe to accumulate unconditionally.
-	r.addRunBilling(run.ID, amountUSDMicros)
+	ledger := r.newPaymentLedger(wf, run)
+	if err := ledger.Reserve(ctx, models.ByokFlatFeeUSDMicros); err != nil {
+		if isBillingRefusal(err) {
+			return nil, err
+		}
+		return nil, fmt.Errorf("reserving credits: %w", errBillingCheckFailed)
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			ledger.Release(ctx, models.ByokFlatFeeUSDMicros)
+		}
+	}()
+	result, err := exec()
+	if err != nil {
+		return result, err
+	}
+	// Commit also folds the fee into this run's on-chain run-total
+	// settlement (see newPaymentLedger), as debiting afterwards used to.
+	ledger.Commit(ctx, nodeID, models.ByokFlatFeeUSDMicros, models.DebitKindByokFlatFee)
+	committed = true
+	return result, nil
 }
 
 // addRunBilling folds amountUSDMicros into the running total settleRunTotal
@@ -221,6 +312,9 @@ const ledgerCompensationTimeout = 10 * time.Second
 func (r *Runner) newPaymentLedger(wf models.Workflow, run models.Run) nodes.PaymentLedger {
 	return nodes.PaymentLedger{
 		Reserve: func(cctx context.Context, amountUSDMicros int64) error {
+			if err := r.checkCallSpend(cctx, wf, run, amountUSDMicros); err != nil {
+				return err
+			}
 			return r.store.ReserveCredits(cctx, wf.UserID, amountUSDMicros)
 		},
 		Commit: func(cctx context.Context, nodeID string, amountUSDMicros int64, kind string) {
@@ -657,6 +751,9 @@ func (r *Runner) reserveAndFundRun(ctx context.Context, wf models.Workflow, run 
 		if amount > models.MaxSingleX402QuoteUSDMicros {
 			return runFundResult{}, fmt.Errorf("x402 run funding: tool %s quoted %d, exceeding the %d ceiling", tool.ID, amount, models.MaxSingleX402QuoteUSDMicros)
 		}
+		if err := r.checkCallSpend(ctx, wf, run, amount+models.X402PlatformFeeUSDMicros); err != nil {
+			return runFundResult{}, err
+		}
 		if estimate > math.MaxInt64-amount {
 			return runFundResult{}, fmt.Errorf("x402 run funding: estimate overflow summing tool %s", tool.ID)
 		}
@@ -790,6 +887,7 @@ func (r *Runner) reserveAndFundRun(ctx context.Context, wf models.Workflow, run 
 	// happened above via ReserveCredits(creditReserve), so splitting the
 	// in-memory budget here doesn't double-reserve anything.
 	vendorLedger, vendorRemaining := newRunLevelLedger(estimate, wf, run, r.store)
+	vendorLedger = r.limitFundedLedger(wf, run, vendorLedger)
 	markupLedger, markupRemaining := newRunLevelLedger(markupTotal, wf, run, r.store)
 	cleanup := func(cctx context.Context) {
 		unused := vendorRemaining() + markupRemaining()
@@ -856,8 +954,8 @@ func prependRunFundingReceipt(result map[string]any, rf runFundResult, node mode
 // spends on the user's behalf — platform-key LLM calls, and real x402
 // settlements paid out of the platform wallets. Charging for BYOK billed
 // users for compute they had already bought themselves. Logs on failure
-// rather than failing the node, same rationale as debitOrLog: the call
-// already happened, there's nothing left to roll back.
+// rather than failing the node: the call already happened, there's nothing
+// left to roll back.
 func (r *Runner) debitAgentFee(ctx context.Context, wf models.Workflow, run models.Run, nodeID string, amountUSDMicros int64, platformMode bool, model string, tokensIn, tokensOut int) {
 	if !platformMode {
 		return
@@ -1058,6 +1156,7 @@ func (r *Runner) notifyIfBalanceLow(ctx context.Context, userID string) {
 
 // Run executes a workflow from scratch. Call via Start rather than directly.
 func (r *Runner) Run(ctx context.Context, wf models.Workflow, run models.Run, gen uint64) {
+	defer r.trackSpendLimit(wf, run)()
 	defer r.broker.Close(run.ID)
 	defer r.registry.deregister(wf.ID, gen)
 
@@ -1110,6 +1209,7 @@ func (r *Runner) Run(ctx context.Context, wf models.Workflow, run models.Run, ge
 // default has to be "don't", with an operator's explicit force required to
 // accept that known double-charge risk.
 func (r *Runner) Resume(ctx context.Context, wf models.Workflow, run models.Run, gen uint64, force bool) {
+	defer r.trackSpendLimit(wf, run)()
 	defer r.broker.Close(run.ID)
 	defer r.registry.deregister(wf.ID, gen)
 
@@ -1255,6 +1355,9 @@ func (r *Runner) execute(ctx context.Context, wf models.Workflow, run models.Run
 		inputJSON, _ = json.Marshal(run.InputContext)
 	}
 	rc := NewRunContext(run.ID, inputJSON)
+	// Each node reads its input from its own flow predecessors, not from
+	// whichever node in its level finished last (#68) -- see nodeRunContext.
+	msgPreds := messagePredecessors(levels, wf.Edges)
 
 	// Workflow variables are loaded once per run. A workflow with none
 	// gets an empty map, and ExpandState is a no-op on every field, so
@@ -1338,7 +1441,7 @@ func (r *Runner) execute(ctx context.Context, wf models.Workflow, run models.Run
 				attempts := 0
 				for {
 					attempts++
-					result, execErr = r.executeNode(ctx, n, attachMap, walletByAgent, rc, run, wf)
+					result, execErr = r.executeNode(ctx, n, attachMap, walletByAgent, rc.forNode(msgPreds[n.ID]), run, wf)
 					// A sibling in this same parallel level already failed the
 					// run (atomic `failed` below) -- no point sleeping through
 					// a backoff and making another live outbound call for a
@@ -1591,7 +1694,7 @@ func (r *Runner) executeNode(
 	node models.WorkflowNode,
 	attachMap map[string]models.AttachConfig,
 	walletByAgent map[string]models.AgentWallet,
-	rc *RunContext,
+	rc *nodeRunContext,
 	run models.Run,
 	wf models.Workflow,
 ) (any, error) {
@@ -1652,6 +1755,9 @@ func (r *Runner) executeNode(
 			agentFeeUSDMicros = nodes.PlatformKeyFeeUSDMicros(nodes.ModelTier(provider.Template, resolvedModel))
 		}
 
+		if err := r.checkCallSpend(ctx, wf, run, agentFeeUSDMicros); err != nil {
+			return nil, err
+		}
 		if err := r.preflightCheck(ctx, wf, agentFeeUSDMicros); err != nil {
 			return nil, err
 		}
@@ -1778,18 +1884,13 @@ func (r *Runner) executeNode(
 	case models.NodeTypeProvider:
 		return rc.Message(), nil
 	case models.NodeTypeTool:
+		// Fee reserved before the request goes out -- see withReservedFlatFee.
 		billable := nodes.BillableFlatFee(node.Type, node.Template)
-		if billable {
-			if err := r.preflightCheck(ctx, wf, models.ByokFlatFeeUSDMicros); err != nil {
-				return nil, err
-			}
-		}
-		result, err := nodes.ExecuteTool(ctx, node, rc)
+		result, err := r.withReservedFlatFee(ctx, wf, run, node.ID, billable, func() (any, error) {
+			return nodes.ExecuteTool(ctx, node, rc)
+		})
 		if err != nil {
 			return nil, err
-		}
-		if billable {
-			r.debitOrLog(ctx, wf, run, node.ID, models.ByokFlatFeeUSDMicros, models.DebitKindByokFlatFee)
 		}
 		return result, nil
 	case models.NodeTypeTool402:
@@ -1879,21 +1980,18 @@ func (r *Runner) executeNode(
 			},
 		})
 	case models.NodeTypeAction:
+		// Fee reserved before the connector call -- see withReservedFlatFee.
+		// A skip comes back as an error there, so its reservation is released
+		// and the skip itself is still reported as success below.
 		billable := nodes.BillableFlatFee(node.Type, node.Template)
-		if billable {
-			if err := r.preflightCheck(ctx, wf, models.ByokFlatFeeUSDMicros); err != nil {
-				return nil, err
-			}
-		}
-		result, err := nodes.ExecuteAction(ctx, node, rc)
+		result, err := r.withReservedFlatFee(ctx, wf, run, node.ID, billable, func() (any, error) {
+			return nodes.ExecuteAction(ctx, node, rc)
+		})
 		if err != nil {
 			if errors.Is(err, nodes.ErrActionSkipped) {
 				return result, nil
 			}
 			return nil, err
-		}
-		if billable {
-			r.debitOrLog(ctx, wf, run, node.ID, models.ByokFlatFeeUSDMicros, models.DebitKindByokFlatFee)
 		}
 		return result, nil
 	case models.NodeTypeGoogle:
@@ -1907,27 +2005,23 @@ func (r *Runner) executeNode(
 		// "http"), so calling it here means a future template-conditional
 		// change there (e.g. a free Google read-only op) takes effect
 		// automatically instead of silently being ignored by this branch.
+		//
+		// Fee reserved before the Google API call -- see withReservedFlatFee.
 		billable := nodes.BillableFlatFee(node.Type, node.Template)
-		if billable {
-			if err := r.preflightCheck(ctx, wf, models.ByokFlatFeeUSDMicros); err != nil {
-				return nil, err
-			}
-		}
-		result, err := nodes.ExecuteGoogle(ctx, node, rc, nodes.GoogleConfig{
-			Store:        r.store,
-			EncryptKey:   r.encryptionKey,
-			ClientID:     r.googleClientID,
-			ClientSecret: r.googleClientSecret,
-			UserID:       wf.UserID,
+		result, err := r.withReservedFlatFee(ctx, wf, run, node.ID, billable, func() (any, error) {
+			return nodes.ExecuteGoogle(ctx, node, rc, nodes.GoogleConfig{
+				Store:        r.store,
+				EncryptKey:   r.encryptionKey,
+				ClientID:     r.googleClientID,
+				ClientSecret: r.googleClientSecret,
+				UserID:       wf.UserID,
+			})
 		})
 		if err != nil {
 			if errors.Is(err, nodes.ErrActionSkipped) {
 				return result, nil
 			}
 			return nil, err
-		}
-		if billable {
-			r.debitOrLog(ctx, wf, run, node.ID, models.ByokFlatFeeUSDMicros, models.DebitKindByokFlatFee)
 		}
 		return result, nil
 	default:

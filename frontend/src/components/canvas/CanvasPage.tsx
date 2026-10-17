@@ -20,7 +20,6 @@ import {
   useCredits,
   refreshBalance as refreshCredits,
 } from "@/lib/credits/store";
-import { LOW_BALANCE_THRESHOLD_USD } from "@/lib/credits/fx";
 import { CanvasGraph } from "./CanvasGraph";
 import { PalettePanel } from "./PalettePanel";
 import { Inspector } from "./Inspector";
@@ -58,6 +57,7 @@ import {
   loadWidths,
   saveWidths,
 } from "./panelSizing";
+import { createSaveFlushQueue } from "./saveFlushQueue";
 
 interface CanvasPageProps {
   workflowId: string;
@@ -222,27 +222,36 @@ export function CanvasPage({ workflowId }: CanvasPageProps) {
     }
   }, []);
 
-  // A drag states a width, so it updates the desired value too.
+  const fit = fitPanels({
+    rowWidth: rowW,
+    paletteW,
+    inspectorW,
+    paletteWanted: !paletteCollapsed && can("workflow.editGraph", readOnly),
+    inspectorWanted: !inspectorCollapsed,
+    prefer,
+  });
+
+  // Dragging reserves only the space occupied by the other visible panel.
   const resizePalette = useCallback((req: number) => {
     const w = clampWidth(
       req,
       PALETTE,
       rowWidth(),
-      widthsRef.current.inspectorW,
+      fit.inspector ? widthsRef.current.inspectorW : RAIL_W,
     );
     desiredRef.current = { ...desiredRef.current, paletteW: w };
     setPaletteW(w);
-  }, []);
+  }, [fit.inspector]);
   const resizeInspector = useCallback((req: number) => {
     const w = clampWidth(
       req,
       INSPECTOR,
       rowWidth(),
-      widthsRef.current.paletteW,
+      fit.palette ? widthsRef.current.paletteW : canEdit ? RAIL_W : 0,
     );
     desiredRef.current = { ...desiredRef.current, inspectorW: w };
     setInspectorW(w);
-  }, []);
+  }, [fit.palette, canEdit]);
   // desiredRef, not widthsRef. widthsRef holds the CLAMPED widths and is only
   // refreshed by an effect after commit, so persisting it (a) wrote the
   // pre-change value when called synchronously from a reset, and (b) carried
@@ -252,20 +261,6 @@ export function CanvasPage({ workflowId }: CanvasPageProps) {
   const persistWidths = useCallback(() => {
     saveWidths(desiredRef.current);
   }, []);
-
-  // Derived, not stored: with no "I auto-closed this" state to clear, a wider
-  // row simply recomputes to open.
-  const fit = fitPanels({
-    rowWidth: rowW,
-    paletteW,
-    inspectorW,
-    // Read-only clients have nothing to drag onto the canvas, so the palette
-    // is not merely collapsed for them -- it does not exist. That predates
-    // this change and is unrelated to width.
-    paletteWanted: !paletteCollapsed && can("workflow.editGraph", readOnly),
-    inspectorWanted: !inspectorCollapsed,
-    prefer,
-  });
 
   // No state resets here: the route passes key={workflowId}, so navigating to
   // a different workflow remounts this component and every piece of state
@@ -335,39 +330,68 @@ export function CanvasPage({ workflowId }: CanvasPageProps) {
   // force both to land before something else reads the graph server-side.
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pendingSave = useRef<Workflow | null>(null);
-  const inFlightSave = useRef<Promise<void> | null>(null);
+  const inFlightSave = useRef<Promise<boolean> | null>(null);
+  const [saveFlushQueue] = useState(createSaveFlushQueue);
 
-  const saveWorkflow = useCallback((wf: Workflow) => {
+  // Resolves true only when the update reached the server. The autosave timer
+  // can swallow the result, but Run and Deploy flush through it first and must
+  // not proceed against a graph the backend never persisted -- so the failure
+  // is surfaced here rather than lost behind the save label.
+  const saveWorkflow = useCallback((wf: Workflow): Promise<boolean> => {
     const p = workflowsApi
       .update(wf.id, { name: wf.name, nodes: wf.nodes, edges: wf.edges })
       .then(() => {
+        saveFlushQueue.record(true);
         const now = new Date();
         setSaveLabel(
           `saved · ${now.getHours()}:${String(now.getMinutes()).padStart(2, "0")}`,
         );
+        return true;
       })
-      .catch(() => setSaveLabel("save failed"))
+      .catch(() => {
+        saveFlushQueue.record(false);
+        setSaveLabel("save failed");
+        return false;
+      })
       .finally(() => {
         if (inFlightSave.current === p) inFlightSave.current = null;
       });
     inFlightSave.current = p;
     return p;
-  }, []);
+  }, [saveFlushQueue]);
 
   // Settles whatever the autosave still owes the server. Anything that makes
   // the backend re-read the graph from the DB (build mode) must await this
   // first, or it edits a stale copy and its response overwrites the newer
   // client state -- silently reverting the edit that was mid-debounce.
-  const flushPendingSave = useCallback(async () => {
-    if (saveTimer.current !== null) {
-      clearTimeout(saveTimer.current);
-      saveTimer.current = null;
-    }
-    const pending = pendingSave.current;
-    pendingSave.current = null;
-    await inFlightSave.current;
-    if (pending) await saveWorkflow(pending);
-  }, [saveWorkflow]);
+  //
+  // Resolves true only when the latest graph reached the server. Run and
+  // Deploy check the result and abort when it is false: a run or deploy
+  // against a graph the server never received is exactly the stale-graph
+  // failure this whole mechanism exists to prevent (#67).
+  const flushPendingSave = useCallback(
+    (): Promise<boolean> =>
+      saveFlushQueue.run(async () => {
+        if (saveTimer.current !== null) {
+          clearTimeout(saveTimer.current);
+          saveTimer.current = null;
+        }
+        const pending = pendingSave.current;
+        pendingSave.current = null;
+        // Await whatever is already on the wire before starting the (possibly
+        // newer) pending save, so the two land in order and neither is skipped.
+        const inFlight = inFlightSave.current;
+        const inFlightOk = inFlight ? await inFlight : null;
+        if (pending) {
+          // The pending graph is the newest; its save alone decides whether the
+          // run/deploy may proceed. A failed older in-flight save is superseded
+          // by a successful newer pending save.
+          return saveWorkflow(pending);
+        }
+        return inFlightOk;
+      }),
+    [saveFlushQueue, saveWorkflow],
+  );
 
   useEffect(() => {
     if (!workflow) return;
@@ -452,7 +476,7 @@ export function CanvasPage({ workflowId }: CanvasPageProps) {
       const targetRunId = runId ?? deadLetterRunId;
       if (!targetRunId) {
         showToast(
-          "Nothing to resume — start the workflow again to retry it.",
+          "Nothing to resume: start the workflow again to retry it.",
           "warn",
         );
         return;
@@ -530,6 +554,19 @@ export function CanvasPage({ workflowId }: CanvasPageProps) {
     }
     setDeploying(true);
     try {
+      // Deploy reads the graph from the DB to provision a wallet per agent
+      // node, so an edit still sitting in the autosave debounce (an agent
+      // added a moment ago) would be deployed without. Same reason startBuild
+      // flushes first (#67). A failed flush means the server never got the
+      // latest graph: abort rather than deploy the stale one.
+      const flushed = await flushPendingSave();
+      if (!flushed) {
+        showToast(
+          "Deploy cancelled · latest changes failed to save",
+          "error",
+        );
+        return;
+      }
       const res = await workflowsApi.deploy(workflow.id);
       setDeployed(true);
       setEstimateTick((t) => t + 1);
@@ -544,7 +581,7 @@ export function CanvasPage({ workflowId }: CanvasPageProps) {
     } finally {
       setDeploying(false);
     }
-  }, [deployed, workflow, showToast]);
+  }, [deployed, workflow, showToast, flushPendingSave]);
 
   const hasChatTrigger = useMemo(
     () =>
@@ -628,6 +665,19 @@ export function CanvasPage({ workflowId }: CanvasPageProps) {
         showToast(runBlocked);
         return null;
       }
+      // The run executes the graph the backend loads from the DB, so an edit
+      // still in the autosave debounce would not be part of it -- the user
+      // changes a URL, hits Run, and the old URL gets called. Same reason
+      // startBuild flushes first (#67). A failed flush means the server never
+      // got the latest graph: abort rather than run the stale one.
+      const flushed = await flushPendingSave();
+      if (!flushed) {
+        showToast(
+          "Run cancelled · latest changes failed to save",
+          "error",
+        );
+        return null;
+      }
       try {
         const res = await workflowsApi.run(workflow.id, input);
         setRunId(res.runId);
@@ -643,7 +693,7 @@ export function CanvasPage({ workflowId }: CanvasPageProps) {
         return null;
       }
     },
-    [workflow, runBlocked, showToast],
+    [workflow, runBlocked, showToast, flushPendingSave],
   );
 
   const startBuild = useCallback(
@@ -676,7 +726,13 @@ export function CanvasPage({ workflowId }: CanvasPageProps) {
         // The backend loads the graph fresh from the DB, so a drag still
         // sitting in the autosave debounce would be invisible to it and lost
         // when the build response replaces local state.
-        await flushPendingSave();
+        const flushed = await flushPendingSave();
+        if (!flushed) {
+          await poller?.stop();
+          const message = "Latest changes failed to save. Try again before building.";
+          showToast(`Build cancelled · ${message}`, "error");
+          return { ok: false, reply: `Could not update the workflow: ${message}` };
+        }
         const res = await workflowsApi.build(workflow.id, text, buildId);
         await poller?.stop();
         setWorkflow((wf) =>
@@ -934,10 +990,6 @@ export function CanvasPage({ workflowId }: CanvasPageProps) {
             paletteNode below). Rendering it here while the row is stacked
             gave it a full-height column of its own and squeezed the canvas
             to zero. */}
-        {/* Collapsed: the column and its resize handle give way to a thin
-            rail, so the canvas gets the full ~280px back without the palette
-            disappearing with no way to bring it back. */}
-        {/* Collapsed: a rail with the button that brings it back. */}
         {!compact && can("workflow.editGraph", readOnly) && !fit.palette && (
           <button
             type="button"
@@ -1033,6 +1085,7 @@ export function CanvasPage({ workflowId }: CanvasPageProps) {
                   elapsed={chat.elapsed}
                   done={chat.done}
                   deadLetters={chat.deadLetters}
+                  costs={chat.costs}
                   onResume={handleResume}
                 />
               </div>
@@ -1329,8 +1382,8 @@ function CanvasTopbar({
   // financial cluster. The value comes from the backend (the same row the
   // engine debits), so it is only meaningful once that fetch has landed —
   // hence balanceKnown, which separates a real $0 from "not asked yet".
-  const { balanceUSD, balanceKnown, refreshBalance } = useCredits();
-  const lowBalance = balanceKnown && balanceUSD < LOW_BALANCE_THRESHOLD_USD;
+  const { balanceUSD, balanceKnown, refreshBalance, lowBalanceThresholdUSD } = useCredits();
+  const lowBalance = balanceKnown && balanceUSD < lowBalanceThresholdUSD;
   const [shareOpen, setShareOpen] = useState(false);
   const [estimate, setEstimate] = useState<CostEstimate | null>(null);
 

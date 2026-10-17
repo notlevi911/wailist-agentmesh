@@ -46,6 +46,20 @@ describe("agent attach ports are not interchangeable", () => {
   const agent = node("a", "agent");
   const src = (type: WorkflowNode["type"]) => node(type, type);
 
+  it("rejects flow and input ports used as attachment sources", () => {
+    for (const fromPort of ["in", "out", "model", "tools"] as const) {
+      expect(isValidConnection(src("provider"), fromPort, agent, "model")).toBe(false);
+      expect(isValidConnection(src("tool"), fromPort, agent, "tools")).toBe(false);
+    }
+  });
+
+  it("requires the flow output while retaining State connections", () => {
+    expect(isValidConnection(src("tool"), "top", agent, "in")).toBe(false);
+    expect(isValidConnection(src("state"), "in", src("end"), "in")).toBe(false);
+    expect(isValidConnection(src("state"), "out", src("end"), "in")).toBe(true);
+    expect(isValidConnection(src("trigger"), "out", src("state"), "in")).toBe(true);
+  });
+
   it("takes only a provider in the model socket", () => {
     expect(isValidConnection(src("provider"), "top", agent, "model")).toBe(true);
     expect(isValidConnection(src("tool"), "top", agent, "model")).toBe(false);

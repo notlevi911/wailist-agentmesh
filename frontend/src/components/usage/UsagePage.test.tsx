@@ -8,7 +8,11 @@ const state = vi.hoisted(() => ({
   gate: Promise.resolve() as Promise<void>,
   // Set by a test to make one of the five requests fail at once.
   failTimeseries: false,
-  phone: null as null | { onRetry: () => void | Promise<void> },
+  phone: null as null | {
+    onRetry: () => void | Promise<void>;
+    scopedWorkflowId: string | null;
+    onClearScope: () => void;
+  },
 }));
 
 vi.mock("@/hooks/useReadOnly", () => ({ useReadOnly: () => state.readOnly }));
@@ -20,7 +24,11 @@ vi.mock("@/lib/credits/store", () => {
 vi.mock("next/navigation", () => ({ useRouter: () => ({ push: vi.fn() }) }));
 vi.mock("@/components/Topbar", () => ({ Topbar: () => null }));
 vi.mock("./phone/UsagePhonePage", () => ({
-  UsagePhonePage: (p: { onRetry: () => void | Promise<void> }) => {
+  UsagePhonePage: (p: {
+    onRetry: () => void | Promise<void>;
+    scopedWorkflowId: string | null;
+    onClearScope: () => void;
+  }) => {
     state.phone = p;
     return <div>phone usage</div>;
   },
@@ -53,6 +61,7 @@ afterEach(() => {
   state.gate = Promise.resolve();
   state.failTimeseries = false;
   state.phone = null;
+  window.history.replaceState(null, "", "/");
 });
 
 // The desktop page is two wide tables that only scroll sideways on a phone,
@@ -71,6 +80,20 @@ describe("UsagePage", () => {
     state.readOnly = true;
     render(<UsagePage />);
     expect(screen.getByText("phone usage")).toBeTruthy();
+  });
+
+  it("passes a deep-link scope to the phone screen and clears it from the URL", async () => {
+    window.history.replaceState(null, "", "/usage?workflow=wf-digest");
+    state.readOnly = true;
+    render(<UsagePage />);
+    await waitFor(() =>
+      expect(state.phone?.scopedWorkflowId).toBe("wf-digest"),
+    );
+
+    act(() => state.phone!.onClearScope());
+    expect(new URL(window.location.href).searchParams.has("workflow")).toBe(
+      false,
+    );
   });
 
   // Pull to refresh stops spinning when the promise it is given settles, so

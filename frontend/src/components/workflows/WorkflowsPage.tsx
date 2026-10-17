@@ -22,6 +22,7 @@ import { WorkflowListSkeleton } from "@/components/ui/Skeleton";
 import { Workflow } from "@/lib/types";
 import { workflows as workflowsApi } from "@/lib/api";
 import { useCredits } from "@/lib/credits/store";
+import { usageHrefForWorkflow } from "@/lib/usageScope";
 import { TENDRIL_WORKFLOW } from "@/lib/data";
 import { loadTemplateWorkflow } from "@/lib/templateWorkflow";
 import { can } from "@/lib/readonly";
@@ -29,19 +30,24 @@ import { workflowHref } from "@/lib/routes";
 import { filterWorkflows, type StatusFilter } from "@/lib/workflowList";
 import { ImportModal } from "./ImportModal";
 import { ShareModal } from "./ShareModal";
-import { WorkflowsPhoneList } from "./phone/WorkflowsPhoneList";
-import { WorkflowOverview } from "./WorkflowOverview";
 import {
+  DEFAULT_PAGE_SIZE,
   Pager,
   pageSlice,
-  DEFAULT_PAGE_SIZE,
   type PageSize,
 } from "@/components/ui/Pager";
+import { WorkflowsPhoneList } from "./phone/WorkflowsPhoneList";
+import { WorkflowOverview } from "./WorkflowOverview";
 import { ghostBtn, primaryBtn } from "@/components/ui/buttons";
 import { useReadOnly } from "@/hooks/useReadOnly";
+import { useIsCompact } from "@/hooks/useIsCompact";
+import { IS_NATIVE } from "@/lib/nativeAuth";
+import { DesktopRowMenu } from "./DesktopRowMenu";
+import { scheduleErrorText } from "@/lib/scheduleError";
 import {
   cadenceToCron,
   cronToCadence,
+  selectedDaysOfWeek,
   type Cadence,
   type CadenceValue,
 } from "@/lib/cronCadence";
@@ -136,18 +142,9 @@ export function WorkflowsPage() {
     () => filterWorkflows(wfList, { query: q, status }),
     [wfList, q, status],
   );
-
-  // Fetched whole (list has no offset), so paging is a slice rather than a
-  // request — unlike Bazaar, which pages the server.
   const [page, setPage] = useState(0);
   const [pageSize, setPageSize] = useState<PageSize>(DEFAULT_PAGE_SIZE);
-  // pageSlice clamps rather than resetting, so a filter that shortens the
-  // list lands on its last page instead of an empty one.
-  const {
-    rows: pageRows,
-    page: safePage,
-    totalPages,
-  } = useMemo(
+  const { rows: pageRows, page: safePage, totalPages } = useMemo(
     () => pageSlice(filtered, page, pageSize),
     [filtered, page, pageSize],
   );
@@ -202,52 +199,28 @@ export function WorkflowsPage() {
     }
   }, []);
 
-  // Schedule set/clear mirror handleDelete's pattern: optimistic local list
-  // update on success, tagged pageError on failure. Both re-throw so
-  // SchedulePopover's own inline error state (right next to the button the
-  // user just clicked) shows the same message rather than only the
-  // page-level banner.
+  // Schedule editors own their inline errors, so failures must not also
+  // expose an unsanitized message in the page banner.
   const handleSetSchedule = useCallback(async (id: string, cron: string) => {
-    setPageError((prev) => (prev?.source === "schedule" ? null : prev));
-    try {
-      const { cron: savedCron, nextRunAt } = await workflowsApi.setSchedule(
-        id,
-        cron,
-      );
-      setWfList((prev) =>
-        prev.map((w) =>
-          w.id === id
-            ? { ...w, scheduleCron: savedCron, scheduleNextRunAt: nextRunAt }
-            : w,
-        ),
-      );
-    } catch (e) {
-      setPageError({
-        source: "schedule",
-        message: e instanceof Error ? e.message : "could not save schedule",
-      });
-      throw e;
-    }
+    const { cron: savedCron, nextRunAt } = await workflowsApi.setSchedule(id, cron);
+    setWfList((prev) =>
+      prev.map((w) =>
+        w.id === id
+          ? { ...w, scheduleCron: savedCron, scheduleNextRunAt: nextRunAt }
+          : w,
+      ),
+    );
   }, []);
 
   const handleClearSchedule = useCallback(async (id: string) => {
-    setPageError((prev) => (prev?.source === "schedule" ? null : prev));
-    try {
-      await workflowsApi.clearSchedule(id);
-      setWfList((prev) =>
-        prev.map((w) =>
-          w.id === id
-            ? { ...w, scheduleCron: undefined, scheduleNextRunAt: undefined }
-            : w,
-        ),
-      );
-    } catch (e) {
-      setPageError({
-        source: "schedule",
-        message: e instanceof Error ? e.message : "could not remove schedule",
-      });
-      throw e;
-    }
+    await workflowsApi.clearSchedule(id);
+    setWfList((prev) =>
+      prev.map((w) =>
+        w.id === id
+          ? { ...w, scheduleCron: undefined, scheduleNextRunAt: undefined }
+          : w,
+      ),
+    );
   }, []);
 
   // A phone gets its own thin list: no create, import, schedule or share
@@ -376,7 +349,7 @@ export function WorkflowsPage() {
                 border: "1px solid var(--danger)",
                 background: "var(--bg-elev-1)",
                 color: "var(--danger)",
-                fontSize: "var(--t-2)",
+                fontSize: 12.5,
               }}
             >
               {pageError.message}
@@ -407,7 +380,7 @@ export function WorkflowsPage() {
                   borderRadius: "var(--r-2)",
                   color: "var(--fg)",
                   fontFamily: "var(--font-sans)",
-                  fontSize: "var(--t-3)",
+                  fontSize: 13,
                   outline: "none",
                 }}
                 placeholder="Search workflows, tags…"
@@ -418,7 +391,7 @@ export function WorkflowsPage() {
             <div
               style={{
                 display: "flex",
-                gap: "var(--s-0)",
+                gap: 2,
                 background: "var(--bg-elev-1)",
                 padding: 3,
                 borderRadius: "var(--r-2)",
@@ -428,7 +401,9 @@ export function WorkflowsPage() {
               {(["all", "active", "paused", "draft"] as const).map((s) => (
                 <button
                   key={s}
+                  type="button"
                   className="wf-filter"
+                  aria-pressed={status === s}
                   onClick={() => setStatus(s)}
                   style={{
                     border: "none",
@@ -436,9 +411,9 @@ export function WorkflowsPage() {
                       status === s ? "var(--bg-elev-3)" : "transparent",
                     color: status === s ? "var(--fg)" : "var(--fg-muted)",
                     padding: "6px 12px",
-                    fontSize: "var(--t-2)",
+                    fontSize: 12,
                     fontWeight: 500,
-                    borderRadius: "var(--r-2)",
+                    borderRadius: 5,
                     cursor: "pointer",
                     textTransform: "capitalize",
                     fontFamily: "var(--font-sans)",
@@ -452,7 +427,7 @@ export function WorkflowsPage() {
             <div
               style={{
                 display: "flex",
-                gap: "var(--s-0)",
+                gap: 2,
                 background: "var(--bg-elev-1)",
                 padding: 3,
                 borderRadius: "var(--r-2)",
@@ -460,7 +435,9 @@ export function WorkflowsPage() {
               }}
             >
               <button
+                type="button"
                 className="wf-view-toggle"
+                aria-pressed={view === "rows"}
                 onClick={() => setView("rows")}
                 style={{
                   ...ghostBtnSm,
@@ -473,7 +450,9 @@ export function WorkflowsPage() {
                 ☰ Rows
               </button>
               <button
+                type="button"
                 className="wf-view-toggle"
+                aria-pressed={view === "grid"}
                 onClick={() => setView("grid")}
                 style={{
                   ...ghostBtnSm,
@@ -483,7 +462,7 @@ export function WorkflowsPage() {
                   border: "none",
                   display: "flex",
                   alignItems: "center",
-                  gap: "var(--s-1)",
+                  gap: 4,
                 }}
               >
                 <IconGrid size={11} /> Grid
@@ -505,6 +484,7 @@ export function WorkflowsPage() {
               onSetSchedule={handleSetSchedule}
               onClearSchedule={handleClearSchedule}
               onShare={setShareWorkflowId}
+              onViewUsage={(id) => router.push(usageHrefForWorkflow(id))}
             />
           ) : (
             <WorkflowGrid
@@ -513,7 +493,6 @@ export function WorkflowsPage() {
             />
           )}
 
-          {/* Keep a changed page size reachable even when every row fits. */}
           {!loading && (totalPages > 1 || pageSize !== DEFAULT_PAGE_SIZE) && (
             <Pager
               page={safePage}
@@ -535,7 +514,7 @@ export function WorkflowsPage() {
                 borderRadius: "var(--r-3)",
                 color: "var(--fg-dim)",
                 fontFamily: "var(--font-mono)",
-                fontSize: "var(--t-2)",
+                fontSize: 12,
               }}
             >
               {wfList.length === 0
@@ -588,6 +567,11 @@ function StatusBadge({ status }: { status?: string }) {
   );
 }
 
+// RowMenu is the ⋯ menu on a workflow row. Delete is permanent, so it asks for
+// a second click ("Delete permanently?") in place rather than firing on the
+// first — and rather than a browser confirm() dialog, which the rest of the app
+// doesn't use. Compact viewports and the native shell only: desktop renders
+// DesktopRowMenu instead (see WorkflowRows).
 function RowMenu({
   workflowId,
   onDelete,
@@ -598,6 +582,8 @@ function RowMenu({
   onClearSchedule,
 }: {
   workflowId: string;
+  /** Used by DesktopRowMenu; accepted here so the two are interchangeable. */
+  workflowName?: string;
   onDelete: () => void;
   onShare: () => void;
   deployed: boolean;
@@ -608,10 +594,7 @@ function RowMenu({
   const [open, setOpen] = useState(false);
   const [confirming, setConfirming] = useState(false);
   const [view, setView] = useState<"menu" | "schedule">("menu");
-  // workflowsApi.list() doesn't return scheduleCron/scheduleNextRunAt (only
-  // the single-workflow GET does), so the row's props are always stale --
-  // fetched fresh every time the Schedule item is opened, rather than
-  // trusted from the list hydration.
+  // Re-read on open so edits made since list hydration are not overwritten.
   const [freshSchedule, setFreshSchedule] = useState<{
     cron?: string;
     nextRunAt?: string;
@@ -623,9 +606,12 @@ function RowMenu({
   // The rows list scrolls horizontally (overflow-x: auto), which clips absolutely
   // positioned children in both axes — so the menu is position:fixed, anchored to
   // the button's viewport rect, and closes on scroll/resize rather than drifting.
-  const [anchor, setAnchor] = useState<{ top: number; right: number } | null>(
-    null,
-  );
+  const [anchor, setAnchor] = useState<{
+    top?: number;
+    bottom?: number;
+    right: number;
+    maxHeight: number;
+  } | null>(null);
   const ref = useRef<HTMLDivElement>(null);
   const btnRef = useRef<HTMLButtonElement>(null);
   // Guards the schedule fetch below against a stale response landing after
@@ -642,10 +628,6 @@ function RowMenu({
     setScheduleFetchError(null);
   }, []);
 
-  // Shared by the "Schedule" menu item and the error state's Retry button
-  // below: the row's own scheduleCron/scheduleNextRunAt props come from
-  // workflowsApi.list(), which the backend never populates, so this is the
-  // only way to ever actually get the real schedule.
   const fetchSchedule = useCallback(() => {
     setFreshSchedule(null);
     setScheduleFetchError(null);
@@ -670,7 +652,7 @@ function RowMenu({
       .catch((e) => {
         if (scheduleFetchIdRef.current !== fetchId) return;
         setScheduleFetchError(
-          e instanceof Error ? e.message : "could not load schedule",
+          scheduleErrorText(e, "load"),
         );
       })
       .finally(() => {
@@ -702,16 +684,23 @@ function RowMenu({
       if (!ref.current?.contains(e.target as Node)) close();
     };
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") close();
+      if (e.key === "Escape") {
+        close();
+        btnRef.current?.focus({ preventScroll: true });
+      }
+    };
+    const onScroll = (e: Event) => {
+      if (e.target instanceof Node && ref.current?.contains(e.target)) return;
+      close();
     };
     document.addEventListener("mousedown", onDocClick);
     document.addEventListener("keydown", onKey);
-    window.addEventListener("scroll", close, true);
+    window.addEventListener("scroll", onScroll, true);
     window.addEventListener("resize", close);
     return () => {
       document.removeEventListener("mousedown", onDocClick);
       document.removeEventListener("keydown", onKey);
-      window.removeEventListener("scroll", close, true);
+      window.removeEventListener("scroll", onScroll, true);
       window.removeEventListener("resize", close);
     };
   }, [open, close]);
@@ -727,6 +716,12 @@ function RowMenu({
         aria-label="Workflow actions"
         aria-haspopup="menu"
         aria-expanded={open}
+        onMouseDown={(e) => {
+          if (e.button !== 0) return;
+          // Focusing a clipped row button must not scroll and dismiss its menu.
+          e.preventDefault();
+          e.currentTarget.focus({ preventScroll: true });
+        }}
         style={{
           ...ghostBtnSm,
           width: 28,
@@ -741,9 +736,16 @@ function RowMenu({
           }
           const rect = btnRef.current?.getBoundingClientRect();
           if (rect) {
+            const above = rect.top > window.innerHeight / 2;
             setAnchor({
-              top: rect.bottom + 6,
-              right: window.innerWidth - rect.right,
+              ...(above
+                ? { bottom: window.innerHeight - rect.top + 6 }
+                : { top: rect.bottom + 6 }),
+              right: Math.max(8, window.innerWidth - rect.right),
+              maxHeight: Math.max(
+                0,
+                (above ? rect.top : window.innerHeight - rect.bottom) - 14,
+              ),
             });
           }
           setConfirming(false);
@@ -760,7 +762,10 @@ function RowMenu({
           style={{
             position: "fixed",
             top: anchor.top,
+            bottom: anchor.bottom,
             right: anchor.right,
+            maxHeight: anchor.maxHeight,
+            overflowY: "auto",
             zIndex: 40,
             minWidth: 168,
             padding: 4,
@@ -787,10 +792,10 @@ function RowMenu({
                   textAlign: "left",
                   padding: "8px 10px",
                   border: "none",
-                  borderRadius: "var(--r-2)",
+                  borderRadius: 5,
                   background: "transparent",
                   color: deployed ? "var(--fg)" : "var(--fg-dim)",
-                  fontSize: "var(--t-2)",
+                  fontSize: 12.5,
                   fontWeight: 500,
                   fontFamily: "var(--font-sans)",
                   cursor: deployed ? "pointer" : "not-allowed",
@@ -817,10 +822,10 @@ function RowMenu({
                   textAlign: "left",
                   padding: "8px 10px",
                   border: "none",
-                  borderRadius: "var(--r-2)",
+                  borderRadius: 5,
                   background: "transparent",
                   color: "var(--fg)",
-                  fontSize: "var(--t-2)",
+                  fontSize: 12.5,
                   fontWeight: 500,
                   fontFamily: "var(--font-sans)",
                   cursor: "pointer",
@@ -857,12 +862,12 @@ function RowMenu({
                   textAlign: "left",
                   padding: "8px 10px",
                   border: "none",
-                  borderRadius: "var(--r-2)",
+                  borderRadius: 5,
                   background: confirming
                     ? "var(--danger-soft, transparent)"
                     : "transparent",
                   color: "var(--danger)",
-                  fontSize: "var(--t-2)",
+                  fontSize: 12.5,
                   fontWeight: confirming ? 600 : 500,
                   fontFamily: "var(--font-sans)",
                   cursor: "pointer",
@@ -888,10 +893,10 @@ function RowMenu({
                     textAlign: "left",
                     padding: "8px 10px",
                     border: "none",
-                    borderRadius: "var(--r-2)",
+                    borderRadius: 5,
                     background: "transparent",
                     color: "var(--fg-muted)",
-                    fontSize: "var(--t-2)",
+                    fontSize: 12.5,
                     fontFamily: "var(--font-sans)",
                     cursor: "pointer",
                   }}
@@ -910,26 +915,21 @@ function RowMenu({
                   border: "none",
                   color: "var(--fg-muted)",
                   cursor: "pointer",
-                  fontSize: "var(--t-1)",
+                  fontSize: 11,
                   padding: 0,
                   marginBottom: 8,
                 }}
               >
                 ← back
               </button>
-              <div style={{ fontSize: "var(--t-1)", color: "var(--fg-dim)" }}>
+              <div style={{ fontSize: 11, color: "var(--fg-dim)" }}>
                 Loading…
               </div>
             </div>
           )}
           {view === "schedule" && !scheduleLoading && scheduleFetchError && (
-            // The row's own scheduleCron/scheduleNextRunAt props come from
-            // workflowsApi.list(), which the backend never populates --
-            // falling back to them on a fetch error would always show "no
-            // schedule" for a workflow that actually has one, and Save
-            // would then silently overwrite the real schedule with the
-            // popover's defaults. Surface the error and let the user retry
-            // instead of rendering a form seeded with data we know is wrong.
+            // The list snapshot may be stale. Require a fresh read before
+            // exposing a form that could overwrite the saved schedule.
             <div style={{ padding: 10, width: 220 }}>
               <button
                 onClick={() => setView("menu")}
@@ -938,7 +938,7 @@ function RowMenu({
                   border: "none",
                   color: "var(--fg-muted)",
                   cursor: "pointer",
-                  fontSize: "var(--t-1)",
+                  fontSize: 11,
                   padding: 0,
                   marginBottom: 8,
                 }}
@@ -947,7 +947,7 @@ function RowMenu({
               </button>
               <div
                 style={{
-                  fontSize: "var(--t-1)",
+                  fontSize: 11,
                   color: "var(--danger)",
                   marginBottom: 8,
                 }}
@@ -1003,22 +1003,25 @@ function SchedulePopover({
   onSave: (cron: string) => Promise<void>;
   onRemove: () => Promise<void>;
 }) {
-  const initial = useMemo<CadenceValue>(
-    () =>
-      (scheduleCron ? cronToCadence(scheduleCron) : null) ?? {
-        cadence: "daily",
-        time: "09:00",
-        dayOfWeek: 1,
-        dayOfMonth: 1,
-      },
+  const storedValue = useMemo(
+    () => (scheduleCron ? cronToCadence(scheduleCron) : null),
     [scheduleCron],
   );
+  const custom = !!scheduleCron && !storedValue;
+  const initial: CadenceValue = storedValue ?? {
+    cadence: "daily",
+    time: "09:00",
+    dayOfWeek: 1,
+    dayOfMonth: 1,
+  };
   const [cadence, setCadence] = useState<Cadence>(initial.cadence);
   const [time, setTime] = useState(initial.time);
-  const [dayOfWeek, setDayOfWeek] = useState(initial.dayOfWeek ?? 1);
+  const [daysOfWeek, setDaysOfWeek] = useState(() => selectedDaysOfWeek(initial));
   const [dayOfMonth, setDayOfMonth] = useState(initial.dayOfMonth ?? 1);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [replacingCustom, setReplacingCustom] = useState(false);
+  const editing = !custom || replacingCustom;
   // Click-to-arm, click-again-to-confirm -- same pattern as RowMenu's
   // delete-workflow button, since Remove here is just as irreversible
   // (deletes the live cron schedule) and shouldn't fire on a single
@@ -1030,16 +1033,16 @@ function SchedulePopover({
     width: "100%",
     padding: "5px 6px",
     marginBottom: 8,
-    fontSize: "var(--t-2)",
+    fontSize: 12,
     fontFamily: "var(--font-mono)",
     background: "var(--bg-elev-1)",
     border: "1px solid var(--border)",
-    borderRadius: "var(--r-1)",
+    borderRadius: 4,
     color: "var(--fg)",
   };
   const labelStyle: React.CSSProperties = {
     display: "block",
-    fontSize: "var(--t-0)",
+    fontSize: 10,
     color: "var(--fg-dim)",
     marginBottom: 3,
   };
@@ -1048,29 +1051,46 @@ function SchedulePopover({
     <div style={{ padding: 10, width: 220 }}>
       <button
         onClick={onBack}
+        disabled={saving}
         style={{
           background: "none",
           border: "none",
           color: "var(--fg-muted)",
           cursor: "pointer",
-          fontSize: "var(--t-1)",
+          fontSize: 11,
           padding: 0,
           marginBottom: 8,
         }}
       >
         ← back
       </button>
-      <div style={{ display: "flex", gap: "var(--s-1)", marginBottom: 8 }}>
+      {custom && (
+        <div role="status" style={{ fontSize: 12, lineHeight: 1.5, marginBottom: 10 }}>
+          This workflow has a custom schedule. It stays unchanged unless you
+          choose to replace or remove it.
+          {!editing && (
+            <button
+              type="button"
+              style={{ ...ghostBtnSm, marginTop: 8 }}
+              onClick={() => setReplacingCustom(true)}
+            >
+              Replace schedule
+            </button>
+          )}
+        </div>
+      )}
+      {editing && <fieldset disabled={saving} style={{ margin: 0, padding: 0, border: 0, minWidth: 0 }}><div style={{ display: "flex", gap: 4, marginBottom: 8 }}>
         {(["daily", "weekly", "monthly"] as Cadence[]).map((c) => (
           <button
             key={c}
+            aria-pressed={cadence === c}
             onClick={() => setCadence(c)}
             style={{
               flex: 1,
               padding: "5px 0",
-              fontSize: "var(--t-1)",
+              fontSize: 11,
               fontFamily: "var(--font-sans)",
-              borderRadius: "var(--r-1)",
+              borderRadius: 4,
               border: "1px solid var(--border)",
               background: cadence === c ? "var(--accent-soft)" : "transparent",
               color: cadence === c ? "var(--accent)" : "var(--fg-muted)",
@@ -1085,49 +1105,67 @@ function SchedulePopover({
       <label style={labelStyle}>Time (your timezone)</label>
       <input
         type="time"
+        aria-label="Time (your timezone)"
         value={time}
         onChange={(e) => setTime(e.target.value)}
         style={{
           width: "100%",
           padding: "5px 6px",
           marginBottom: 8,
-          fontSize: "var(--t-2)",
+          fontSize: 12,
           fontFamily: "var(--font-mono)",
           background: "var(--bg-elev-1)",
           border: "1px solid var(--border)",
-          borderRadius: "var(--r-1)",
+          borderRadius: 4,
           color: "var(--fg)",
         }}
       />
-      <div
-        style={{
-          fontSize: "var(--t-1)",
-          color: "var(--fg-dim)",
-          marginBottom: 8,
-        }}
-      >
-        Stored in UTC — may shift by an hour across daylight saving.
+      <div style={{ fontSize: 11, color: "var(--fg-dim)", marginBottom: 8 }}>
+        Stored in UTC. May shift by an hour across daylight saving.
       </div>
       {cadence === "weekly" && (
-        <>
-          <label style={labelStyle}>Day of week</label>
-          <select
-            value={dayOfWeek}
-            onChange={(e) => setDayOfWeek(Number(e.target.value))}
-            style={selectStyle}
-          >
-            {DOW_LABELS.map((label, i) => (
-              <option key={i} value={i}>
-                {label}
-              </option>
-            ))}
-          </select>
-        </>
+        <fieldset style={{ margin: "0 0 8px", padding: 0, border: 0 }}>
+          <legend style={labelStyle}>Days of week</legend>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 4 }}>
+            {DOW_LABELS.map((label, day) => {
+              const selected = daysOfWeek.includes(day);
+              return (
+                <button
+                  key={day}
+                  type="button"
+                  aria-pressed={selected}
+                  aria-disabled={selected && daysOfWeek.length === 1}
+                  onClick={() => setDaysOfWeek((days) =>
+                    days.includes(day)
+                      ? days.length === 1 ? days : days.filter((d) => d !== day)
+                      : [...days, day].sort((a, b) => a - b),
+                  )}
+                  style={{
+                    padding: "7px 0",
+                    fontSize: 11,
+                    fontFamily: "var(--font-sans)",
+                    borderRadius: 4,
+                    border: "1px solid var(--border)",
+                    background: selected ? "var(--accent-soft)" : "transparent",
+                    color: selected ? "var(--accent)" : "var(--fg-muted)",
+                    cursor: "pointer",
+                  }}
+                >
+                  {label}
+                </button>
+              );
+            })}
+          </div>
+          <div style={{ fontSize: 10, color: "var(--fg-dim)", marginTop: 4 }}>
+            Select one or more days.
+          </div>
+        </fieldset>
       )}
       {cadence === "monthly" && (
         <>
           <label style={labelStyle}>Day of month</label>
           <select
+            aria-label="Day of month"
             value={dayOfMonth}
             onChange={(e) => setDayOfMonth(Number(e.target.value))}
             style={selectStyle}
@@ -1140,56 +1178,47 @@ function SchedulePopover({
           </select>
         </>
       )}
+      </fieldset>}
       {scheduleNextRunAt && (
-        <div
-          style={{
-            fontSize: "var(--t-0)",
-            color: "var(--fg-dim)",
-            marginBottom: 8,
-          }}
-        >
+        <div style={{ fontSize: 10, color: "var(--fg-dim)", marginBottom: 8 }}>
           Next run: {new Date(scheduleNextRunAt).toLocaleString()}
         </div>
       )}
       {error && (
         <div
-          style={{
-            fontSize: "var(--t-0)",
-            color: "var(--danger)",
-            marginBottom: 8,
-          }}
+          role="alert"
+          style={{ fontSize: 10.5, color: "var(--danger)", marginBottom: 8 }}
         >
           {error}
         </div>
       )}
-      <div style={{ display: "flex", gap: "var(--s-2)" }}>
+      <div style={{ display: "flex", gap: 6 }}>
         <button
-          disabled={saving}
+          disabled={saving || !editing || !time}
           onClick={async () => {
+            if (saving || !editing || !time) return;
             setSaving(true);
             setError(null);
             try {
               await onSave(
-                cadenceToCron({ cadence, time, dayOfWeek, dayOfMonth }),
+                cadenceToCron({ cadence, time, daysOfWeek, dayOfMonth }),
               );
             } catch (e) {
-              setError(
-                e instanceof Error ? e.message : "could not save schedule",
-              );
+              setError(scheduleErrorText(e));
               setSaving(false);
             }
           }}
           style={{
             flex: 1,
             padding: "6px 0",
-            fontSize: "var(--t-1)",
+            fontSize: 11.5,
             fontWeight: 600,
-            borderRadius: "var(--r-1)",
+            borderRadius: 4,
             border: "none",
             background: "var(--accent)",
             color: "var(--bg)",
-            cursor: saving ? "default" : "pointer",
-            opacity: saving ? 0.6 : 1,
+            cursor: saving || !editing || !time ? "default" : "pointer",
+            opacity: saving || !editing || !time ? 0.6 : 1,
           }}
         >
           Save
@@ -1207,9 +1236,7 @@ function SchedulePopover({
               try {
                 await onRemove();
               } catch (e) {
-                setError(
-                  e instanceof Error ? e.message : "could not remove schedule",
-                );
+                setError(scheduleErrorText(e, "remove"));
                 setSaving(false);
                 setRemoveConfirming(false);
               }
@@ -1217,8 +1244,8 @@ function SchedulePopover({
             onBlur={() => setRemoveConfirming(false)}
             style={{
               padding: "6px 10px",
-              fontSize: "var(--t-1)",
-              borderRadius: "var(--r-1)",
+              fontSize: 11.5,
+              borderRadius: 4,
               border: "1px solid var(--border-strong)",
               background: removeConfirming
                 ? "var(--danger-soft, transparent)"
@@ -1244,6 +1271,7 @@ function WorkflowRows({
   onSetSchedule,
   onClearSchedule,
   onShare,
+  onViewUsage,
 }: {
   items: Workflow[];
   onOpen: (id: string) => void;
@@ -1252,8 +1280,13 @@ function WorkflowRows({
   onSetSchedule: (id: string, cron: string) => Promise<void>;
   onClearSchedule: (id: string) => Promise<void>;
   onShare: (id: string) => void;
+  onViewUsage: (id: string) => void;
 }) {
   const readOnly = useReadOnly();
+  // Desktop gets the shadcn/ui menu (DesktopRowMenu); compact viewports and
+  // the native shell use RowMenu below, subject to the device policy.
+  const desktop = !useIsCompact() && !IS_NATIVE;
+  const Menu = desktop ? DesktopRowMenu : RowMenu;
   return (
     <Card style={{ padding: 0, overflowX: "auto" }}>
       <div
@@ -1261,12 +1294,12 @@ function WorkflowRows({
         style={{
           display: "grid",
           gridTemplateColumns: "var(--wf-row-cols)",
-          gap: "var(--s-4)",
+          gap: 12,
           padding: "10px 16px",
           background: "var(--bg-elev-2)",
           borderBottom: "1px solid var(--border)",
           fontFamily: "var(--font-mono)",
-          fontSize: "var(--t-0)",
+          fontSize: 10,
           textTransform: "uppercase",
           letterSpacing: "0.08em",
           color: "var(--fg-dim)",
@@ -1314,31 +1347,17 @@ function WorkflowRows({
             (e.currentTarget.style.background = "transparent")
           }
         >
-          {/* A real link, and load-bearing: the row is a div with an onClick,
-              so with "Open" gone this is the only keyboard route into a
-              workflow. It also buys middle-click and open-in-new-tab. */}
           <div style={{ minWidth: 0 }}>
             <div style={{ minWidth: 0 }}>
               <a
                 href={workflowHref(wf.id)}
                 className="wf-row-name"
-                onClick={(e) => {
-                  // A held modifier is a request aimed at the BROWSER -- open
-                  // this somewhere else -- not at the app. preventDefault on
-                  // one of those swallowed it and routed the current tab
-                  // instead, so the "open in new tab" this link was added for
-                  // did not work. Stop propagation all the same, or the row's
-                  // own onClick routes this tab while the browser opens the
-                  // other one. Middle click never arrives here; it fires
-                  // auxclick, which nothing handles, so the href just works.
-                  if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) {
-                    e.stopPropagation();
+                onClick={(event) => {
+                  event.stopPropagation();
+                  if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) {
                     return;
                   }
-                  // A plain click: the row's handler routes, so keep it a
-                  // client-side nav rather than a full page load.
-                  e.preventDefault();
-                  e.stopPropagation();
+                  event.preventDefault();
                   onOpen(wf.id);
                 }}
                 style={{
@@ -1367,7 +1386,7 @@ function WorkflowRows({
                     key={t}
                     style={{
                       fontFamily: "var(--font-mono)",
-                      fontSize: "var(--t-1)",
+                      fontSize: 11,
                       color: "var(--fg-dim)",
                       textTransform: "uppercase",
                       letterSpacing: "0.06em",
@@ -1384,7 +1403,7 @@ function WorkflowRows({
           </span>
           <span
             data-label="Agents"
-            style={{ fontFamily: "var(--font-mono)", fontSize: "var(--t-2)" }}
+            style={{ fontFamily: "var(--font-mono)", fontSize: 12 }}
           >
             {wf.agents ??
               wf.nodes?.filter((n) => n.type === "agent").length ??
@@ -1394,7 +1413,7 @@ function WorkflowRows({
             data-label="Runs · 30d"
             style={{
               fontFamily: "var(--font-mono)",
-              fontSize: "var(--t-2)",
+              fontSize: 12,
               color: "var(--fg-muted)",
             }}
           >
@@ -1404,7 +1423,7 @@ function WorkflowRows({
             data-label="Spend · 30d"
             style={{
               fontFamily: "var(--font-mono)",
-              fontSize: "var(--t-2)",
+              fontSize: 12,
               color: "var(--accent)",
             }}
           >
@@ -1414,19 +1433,26 @@ function WorkflowRows({
             data-label="Updated"
             style={{
               fontFamily: "var(--font-mono)",
-              fontSize: "var(--t-1)",
+              fontSize: 11,
               color: "var(--fg-muted)",
             }}
           >
             {fmtDate(wf.updatedAt ?? wf.updated)}
           </span>
-          <div
-            className="wf-row-actions"
-            style={{ display: "flex", gap: "var(--s-1)" }}
-          >
-            {/* No "Open" button: the row is already the control, so it was a
-                second smaller target sitting among the row's real actions.
-                The name is a link, which is what carries keyboard access. */}
+          <div className="wf-row-actions" style={{ display: "flex", gap: 4 }}>
+            {/* Usage stays independent of the delete-gated RowMenu because it
+                is read-only. The phone list exposes the same action from its
+                compact row (see phone/WorkflowPhoneRow.tsx). */}
+            <button
+              style={ghostBtnSm}
+              onClick={(e) => {
+                e.stopPropagation();
+                onViewUsage(wf.id);
+              }}
+              title="Usage scoped to this workflow"
+            >
+              Usage
+            </button>
             {/* Its own button rather than an item in RowMenu below, because
                 that menu is gated on "workflow.delete" and so never appears on
                 a phone -- which is the one device this screen is for. Shown
@@ -1450,8 +1476,9 @@ function WorkflowRows({
               </button>
             )}
             {can("workflow.delete", readOnly) && (
-              <RowMenu
+              <Menu
                 workflowId={wf.id}
+                workflowName={wf.name}
                 onDelete={() => onDelete(wf.id)}
                 onShare={() => onShare(wf.id)}
                 deployed={wf.status === "deployed"}
@@ -1479,7 +1506,7 @@ function WorkflowGrid({
       style={{
         display: "grid",
         gridTemplateColumns: "var(--wf-card-cols)",
-        gap: "var(--s-5)",
+        gap: 16,
       }}
     >
       {items.map((wf) => (
@@ -1509,21 +1536,38 @@ function WorkflowGrid({
             style={{
               display: "flex",
               alignItems: "center",
-              justifyContent: "flex-end",
+              justifyContent: "space-between",
             }}
           >
             <StatusBadge status={wf.status} />
           </div>
-          <div
+          <a
+            href={workflowHref(wf.id)}
+            className="wf-row-name"
+            title={wf.name}
+            onClick={(event) => {
+              event.stopPropagation();
+              if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) {
+                return;
+              }
+              event.preventDefault();
+              onOpen(wf.id);
+            }}
             style={{
+              display: "block",
               marginTop: 16,
-              fontSize: "var(--t-4)",
+              fontSize: "var(--t-5)",
               fontWeight: 500,
               letterSpacing: "-0.015em",
+              color: "inherit",
+              textDecoration: "none",
+              overflow: "hidden",
+              textOverflow: "ellipsis",
+              whiteSpace: "nowrap",
             }}
           >
             {wf.name}
-          </div>
+          </a>
           <div
             style={{
               display: "flex",
@@ -1537,7 +1581,7 @@ function WorkflowGrid({
                 key={t}
                 style={{
                   fontFamily: "var(--font-mono)",
-                  fontSize: "var(--t-1)",
+                  fontSize: 11,
                   color: "var(--fg-dim)",
                   textTransform: "uppercase",
                   letterSpacing: "0.06em",
@@ -1554,9 +1598,9 @@ function WorkflowGrid({
               borderTop: "1px solid var(--border-soft)",
               display: "grid",
               gridTemplateColumns: "var(--wf-cardmeta-cols)",
-              gap: "var(--s-3)",
+              gap: 8,
               fontFamily: "var(--font-mono)",
-              fontSize: "var(--t-1)",
+              fontSize: 11,
             }}
           >
             {[
@@ -1575,7 +1619,7 @@ function WorkflowGrid({
                 <div
                   style={{
                     color: "var(--fg-dim)",
-                    fontSize: "var(--t-1)",
+                    fontSize: 11,
                     textTransform: "uppercase",
                     letterSpacing: "0.06em",
                   }}

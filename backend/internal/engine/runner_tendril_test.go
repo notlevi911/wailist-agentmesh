@@ -37,7 +37,7 @@ func TestTendrilNodeWithoutConfigErrors(t *testing.T) {
 	r := &Runner{}
 	_, err := r.executeNode(t.Context(),
 		models.WorkflowNode{ID: "n2", Type: models.NodeTypeTendril, TendrilAction: "rent"},
-		nil, nil, NewRunContext("run1", nil), models.Run{ID: "run1"}, models.Workflow{ID: "wf1"})
+		nil, nil, NewRunContext("run1", nil).forNode(nil), models.Run{ID: "run1"}, models.Workflow{ID: "wf1"})
 	if err == nil {
 		t.Fatal("expected an error when Tendril is not configured")
 	}

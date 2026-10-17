@@ -678,7 +678,7 @@ func TestDryRunDoesNotFlagStepsThatNeverSendTheirInput(t *testing.T) {
 		node models.WorkflowNode
 	}{
 		{"state get", dn("st", models.NodeTypeState, "get")},
-		{"google drive_list", dn("g", models.NodeTypeGoogle, "drive_list")},
+		{"google sheets_read", dn("g", models.NodeTypeGoogle, "sheets_read")},
 		{"http PUT with no body template", put},
 		{"calendly read", dn("c", models.NodeTypeAction, "calendly")},
 	}

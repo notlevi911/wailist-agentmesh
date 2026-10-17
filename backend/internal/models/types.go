@@ -15,7 +15,7 @@ const (
 	NodeTypeState    NodeType = "state"
 	NodeTypeEnd      NodeType = "end"
 	NodeTypeTendril  NodeType = "tendril"
-	// NodeTypeGoogle covers Gmail/Sheets/Calendar/Drive -- grouped under one
+	// NodeTypeGoogle covers Gmail/Sheets/Calendar -- grouped under one
 	// node type (Template selects the specific operation, e.g.
 	// "gmail_send") the same way NodeTypeTendril's TendrilAction does,
 	// rather than one node type per Google product, since they all share

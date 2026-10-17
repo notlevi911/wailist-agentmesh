@@ -38,21 +38,28 @@ describe("buildNodeCatalog", () => {
     expect(actions).toEqual(ACTION_TEMPLATES.map((t) => t.id));
   });
 
-  it("includes the google types the builder could not reach", () => {
-    expect(catalog.types.map((t) => t.type)).toContain("google");
+  it("includes the state and google types the builder could not reach", () => {
+    const types = catalog.types.map((t) => t.type);
+    expect(types).toContain("state");
+    expect(types).toContain("google");
   });
 
-  // State was dropped from the palette, so it must be out of the catalogue
-  // too -- otherwise the chat builder keeps offering a node nobody can add
-  // by hand and whose behaviour was the reason for removing it.
-  it("no longer offers state nodes to the builder", () => {
-    expect(catalog.types.map((t) => t.type)).not.toContain("state");
-  });
-
-  // Without these presets a Tendril node fails with "unknown action".
+  // Without these presets a "Write State" node silently runs get, and a
+  // Tendril node fails with "unknown action".
   it("carries the palette's presets", () => {
+    expect(tpl("state", "set").presets).toEqual({ stateOp: "set" });
     expect(tpl("tendril", "tendril_rent").presets?.tendrilAction).toBe("rent");
     expect(tpl("provider", "gemini").presets).toEqual({ model: "gemini-2.5-flash" });
+  });
+
+  it("keeps automatic Tendril rentals on the same default budget as the palette", () => {
+    const auto = tpl("tendril", "tendril_auto");
+    expect(auto.presets?.tendrilAction).toBe("auto");
+    expect(auto.presets?.tendrilAmount).toBe("");
+    expect(auto.fields.find((field) => field.key === "tendrilAmount")).toMatchObject({
+      where: "field", placeholder: "1",
+    });
+    expect(tpl("tendril", "tendril_topup").presets?.tendrilAmount).toBe("10");
   });
 
   it("marks every credential as a secret, never a settable field", () => {
@@ -72,7 +79,7 @@ describe("buildNodeCatalog", () => {
   });
 
   it("gives Google nodes their account connection", () => {
-    const f = tpl("google", "gmail_list").fields.find((x) => x.key === "oauthCredentialID");
+    const f = tpl("google", "gmail_send").fields.find((x) => x.key === "oauthCredentialID");
     expect(f?.where).toBe("connection");
   });
 });

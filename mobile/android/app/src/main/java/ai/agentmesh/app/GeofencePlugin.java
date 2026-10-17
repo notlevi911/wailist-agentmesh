@@ -190,6 +190,27 @@ public class GeofencePlugin extends Plugin {
                 .addOnFailureListener(e -> call.reject("could not remove the geofence: " + e.getMessage()));
     }
 
+    @PluginMethod
+    public void clearAccountData(PluginCall call) {
+        synchronized (GeofenceReceiver.LOCK) {
+            boolean fencesCleared = GeofenceStore.clear(getContext());
+            boolean queueCleared = getContext()
+                    .getSharedPreferences(GeofenceReceiver.PREFS, Context.MODE_PRIVATE)
+                    .edit().remove(GeofenceReceiver.QUEUE_KEY).remove("agentmesh.geofence.queue").commit();
+            if (!fencesCleared || !queueCleared) {
+                call.reject("could not clear stored location data");
+                return;
+            }
+        }
+        try {
+            client.removeGeofences(GeofenceRegistrar.transitionIntent(getContext()))
+                    .addOnSuccessListener(unused -> call.resolve())
+                    .addOnFailureListener(e -> call.reject("could not remove account geofences", e));
+        } catch (SecurityException e) {
+            call.reject("could not remove account geofences", e);
+        }
+    }
+
     /**
      * Atomically reads and clears GeofenceReceiver's queue in one native call.
      *

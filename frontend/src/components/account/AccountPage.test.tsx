@@ -80,6 +80,7 @@ describe("AccountPage", () => {
     // Usage is a tab on the bottom bar, so Account does not repeat it.
     expect(screen.queryByRole("link", { name: /Usage/ })).toBeNull();
     expect(state.refreshBalance).toHaveBeenCalled();
+    expect(screen.getByRole("link", { name: "Delete account" }).getAttribute("href")).toBe("/settings#delete-title");
   });
 
   it("leaves Notifications out on the web", async () => {

@@ -10,18 +10,9 @@ import (
 	"github.com/agentmesh/backend/internal/models"
 )
 
-// stripeAPIBase is overridden in tests via SetStripeAPIBaseForTest.
-var stripeAPIBase = "https://api.stripe.com"
-
 // SetStripeAPIBaseForTest overrides the Stripe API base URL. Call only from
 // tests. Pass "" to reset to the real API.
-func SetStripeAPIBaseForTest(base string) {
-	if base == "" {
-		stripeAPIBase = "https://api.stripe.com"
-	} else {
-		stripeAPIBase = base
-	}
-}
+func SetStripeAPIBaseForTest(base string) { setAPIBaseForTest("stripe", base) }
 
 // sendStripe creates a Stripe customer, using the run output as the
 // description. Stripe's API takes form encoding, not JSON, so this builds the
@@ -53,7 +44,7 @@ func sendStripe(ctx context.Context, node models.WorkflowNode, rc RunContexter) 
 	if name := resolveTemplate(configVal(node, "stripeName", ""), rc); name != "" {
 		form.Set("name", name)
 	}
-	req, err := newFormRequest(ctx, stripeAPIBase+"/v1/customers", form)
+	req, err := newFormRequest(ctx, apiBase("stripe")+"/v1/customers", form)
 	if err != nil {
 		return nil, fmt.Errorf("Stripe: %w", err)
 	}
@@ -61,14 +52,13 @@ func sendStripe(ctx context.Context, node models.WorkflowNode, rc RunContexter) 
 	return doAndCheck(req, "stripe_customer_created", "Stripe")
 }
 
-// shopifyAPIBase is overridden in tests via SetShopifyAPIBaseForTest.
-// Normally "https://{store}.myshopify.com" is built per-node, so the test
-// override replaces the whole scheme+host.
-var shopifyAPIBase = ""
-
 // SetShopifyAPIBaseForTest overrides the Shopify API base URL entirely.
-// Call only from tests. Pass "" to reset to the real per-store host.
-func SetShopifyAPIBaseForTest(base string) { shopifyAPIBase = base }
+// Normally "https://{store}.myshopify.com" is built per-node, so the test
+// override replaces the whole scheme+host. Its own registry key, separate
+// from the order-note connector's "shopify", so one test's override never
+// leaks into the other connector. Call only from tests. Pass "" to reset to
+// the real per-store host.
+func SetShopifyAPIBaseForTest(base string) { setAPIBaseForTest("shopify_customer", base) }
 
 // shopifyAPIVersion pins the Admin API version. Shopify dates its API and
 // removes versions after ~12 months — bumping this is a deliberate, tested
@@ -95,7 +85,7 @@ func sendShopify(ctx context.Context, node models.WorkflowNode, rc RunContexter)
 	if !jiraDomainPattern.MatchString(store) {
 		return "shopify_skipped_invalid_store", ErrActionSkipped
 	}
-	base := shopifyAPIBase
+	base := apiBase("shopify_customer")
 	if base == "" {
 		base = "https://" + url.PathEscape(store) + ".myshopify.com"
 	}
@@ -108,12 +98,9 @@ func sendShopify(ctx context.Context, node models.WorkflowNode, rc RunContexter)
 		headers, payload, "shopify_customer_created", "Shopify")
 }
 
-// pipedriveAPIBase is overridden in tests via SetPipedriveAPIBaseForTest.
-var pipedriveAPIBase = ""
-
 // SetPipedriveAPIBaseForTest overrides the Pipedrive API base URL entirely.
 // Call only from tests. Pass "" to reset to the real per-company host.
-func SetPipedriveAPIBaseForTest(base string) { pipedriveAPIBase = base }
+func SetPipedriveAPIBaseForTest(base string) { setAPIBaseForTest("pipedrive", base) }
 
 // sendPipedrive logs a CRM note with the run output. Pipedrive takes its API
 // token as a query parameter rather than a header.
@@ -122,7 +109,7 @@ func sendPipedrive(ctx context.Context, node models.WorkflowNode, rc RunContexte
 	if token == "" {
 		return "pipedrive_skipped_no_api_token", ErrActionSkipped
 	}
-	base := pipedriveAPIBase
+	base := apiBase("pipedrive")
 	if base == "" {
 		domain := resolveTemplate(configVal(node, "pipedriveCompanyDomain", ""), rc)
 		if domain == "" {

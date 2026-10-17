@@ -6,13 +6,16 @@
 // verbatim from Inspector.tsx; keep it data-only.
 
 // ── Per-connector config field tables ───────────────────────────────────────
+// Catalog overrides keep UI copy edits out of the generated backend catalog.
 export type ConnectorField =
   | {
       kind: "secret";
       key: string;
       label: string;
       hint?: string;
+      catalogHint?: string;
       placeholder: string;
+      catalogPlaceholder?: string;
       // The field's old Secrets key, for a connector whose Inspector field
       // moved to a new key -- e.g. Stripe's stripeAPIKey (was
       // stripeSecretKey). The backend already falls back to this key for a
@@ -27,7 +30,9 @@ export type ConnectorField =
       key: string;
       label: string;
       hint?: string;
+      catalogHint?: string;
       placeholder?: string;
+      catalogPlaceholder?: string;
     };
 
 export const CONNECTOR_CONFIG_FIELDS: Record<
@@ -906,7 +911,8 @@ export const CONNECTOR_CONFIG_FIELDS: Record<
         key: "mdGFM",
         label: "GitHub Flavored",
         placeholder: "true",
-        hint: "true · false — tables, strikethrough, autolinks",
+        hint: "true · false: tables, strikethrough, autolinks",
+        catalogHint: "true · false \u2014 tables, strikethrough, autolinks",
       },
     ],
   },
@@ -954,30 +960,33 @@ export const CONNECTOR_CONFIG_FIELDS: Record<
         kind: "secret",
         key: "graphqlAuthHeader",
         label: "Authorization header",
-        hint: "sent verbatim — include Bearer if the API wants it",
+        hint: "Sent as entered. Include Bearer if the API requires it.",
+        catalogHint: "sent verbatim \u2014 include Bearer if the API wants it",
         placeholder: "Bearer ghp_xxxxxxxx",
       },
     ],
   },
   algorand_account: {
-    label: "Algorand Account config",
+    label: "Wallet Account config",
     fields: [
       {
         kind: "config",
         key: "algoAddress",
         label: "Address",
-        placeholder: "58-character Algorand address",
+        placeholder: "58-character address",
+        catalogPlaceholder: "58-character Algorand address",
       },
     ],
   },
   algorand_transactions: {
-    label: "Algorand History config",
+    label: "Wallet History config",
     fields: [
       {
         kind: "config",
         key: "algoAddress",
         label: "Address",
-        placeholder: "58-character Algorand address",
+        placeholder: "58-character address",
+        catalogPlaceholder: "58-character Algorand address",
       },
       {
         kind: "config",
@@ -996,7 +1005,7 @@ export const CONNECTOR_CONFIG_FIELDS: Record<
     ],
   },
   algorand_asset: {
-    label: "Algorand Asset config",
+    label: "Asset Details config",
     fields: [
       {
         kind: "config",

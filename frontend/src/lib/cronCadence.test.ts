@@ -15,7 +15,7 @@ import { describe, expect, it } from "vitest";
 // only a synchronous statement, in file order, actually runs first.
 process.env.TZ = "America/New_York";
 
-import { cadenceToCron, cronToCadence } from "./cronCadence";
+import { cadenceToCron, cronToCadence, selectedDaysOfWeek } from "./cronCadence";
 
 // A fixed "now" anchor: Wednesday, Jan 14 2026, in whatever timezone the
 // test runner's Date resolves TZ to (America/New_York, set above).
@@ -36,11 +36,44 @@ describe("cadenceToCron", () => {
     ).toBe("0 14 * * 1");
   });
 
+  it("keeps the legacy single-day field equivalent to a one-item day list", () => {
+    const single = cadenceToCron(
+      { cadence: "weekly", time: "09:00", dayOfWeek: 2 },
+      NOW,
+    );
+    const listed = cadenceToCron(
+      { cadence: "weekly", time: "09:00", daysOfWeek: [2] },
+      NOW,
+    );
+    expect(listed).toBe(single);
+  });
+
+  it("converts several local weekdays into one canonical UTC weekday list", () => {
+    expect(
+      cadenceToCron(
+        { cadence: "weekly", time: "09:00", daysOfWeek: [5, 1, 3] },
+        NOW,
+      ),
+    ).toBe("0 14 * * 1,3,5");
+  });
+
   it("rolls the day-of-week forward when local time crosses midnight UTC", () => {
     // Sunday (0) 21:00 EST = 02:00 UTC the next day (Monday) -> dow rolls 0 -> 1
     expect(
       cadenceToCron({ cadence: "weekly", time: "21:00", dayOfWeek: 0 }, NOW),
     ).toBe("0 2 * * 1");
+  });
+
+  it.each([[], [NaN], [7], [-1], [1, 2.5]].map((daysOfWeek) => ({ daysOfWeek })))("rejects invalid weekday selections $daysOfWeek", ({ daysOfWeek }) => {
+    expect(() => cadenceToCron({ cadence: "weekly", time: "09:00", daysOfWeek }, NOW)).toThrow(/weekday/);
+  });
+
+  it.each(["", "25:00", "09:60", "09:", "NaN:00"])("rejects an invalid time %s", (time) => {
+    expect(() => cadenceToCron({ cadence: "weekly", time, daysOfWeek: [1, 5] }, NOW)).toThrow(/time/);
+  });
+
+  it("deduplicates local weekdays without changing the selection", () => {
+    expect(selectedDaysOfWeek({ cadence: "weekly", time: "09:00", daysOfWeek: [5, 1, 5] })).toEqual([1, 5]);
   });
 
   it("converts a monthly local time+day to UTC minute/hour/day-of-month", () => {
@@ -119,6 +152,31 @@ describe("cronToCadence", () => {
     });
   });
 
+  it("round-trips several weekdays in the local timezone", () => {
+    const cron = cadenceToCron(
+      { cadence: "weekly", time: "09:00", daysOfWeek: [1, 3, 5] },
+      NOW,
+    );
+    expect(cronToCadence(cron, NOW)).toEqual({
+      cadence: "weekly",
+      time: "09:00",
+      daysOfWeek: [1, 3, 5],
+    });
+  });
+
+  it("round-trips local weekdays that shift into the following UTC days", () => {
+    const cron = cadenceToCron(
+      { cadence: "weekly", time: "21:00", daysOfWeek: [0, 1] },
+      NOW,
+    );
+    expect(cron).toBe("0 2 * * 1,2");
+    expect(cronToCadence(cron, NOW)).toEqual({
+      cadence: "weekly",
+      time: "21:00",
+      daysOfWeek: [0, 1],
+    });
+  });
+
   it("round-trips a monthly cron back to local time+day", () => {
     const cron = cadenceToCron(
       { cadence: "monthly", time: "09:00", dayOfMonth: 10 },
@@ -131,6 +189,50 @@ describe("cronToCadence", () => {
     });
   });
 
+  it("round-trips every weekday selection across both timezone directions and clock changes", () => {
+    const previous = process.env.TZ;
+    try {
+      for (const timezone of ["UTC", "America/New_York", "Asia/Kolkata", "Pacific/Kiritimati"]) {
+        process.env.TZ = timezone;
+        for (const [month, day] of [[0, 14], [2, 5], [2, 8], [9, 29], [10, 1]]) {
+          const now = new Date(2026, month, day, 12);
+          for (let mask = 1; mask < 128; mask += 1) {
+            const daysOfWeek = Array.from({ length: 7 }, (_, index) => index).filter((day) => mask & (1 << day));
+            for (const time of ["00:15", "09:00", "19:30", "23:45"]) {
+              const cron = cadenceToCron({ cadence: "weekly", time, daysOfWeek }, now);
+              const parsed = cronToCadence(cron, now);
+              expect(parsed, `${timezone} ${now.toISOString()} ${cron}`).not.toBeNull();
+              expect(parsed?.time).toBe(time);
+              expect(selectedDaysOfWeek(parsed!)).toEqual(daysOfWeek);
+            }
+          }
+        }
+      }
+    } finally {
+      process.env.TZ = previous;
+    }
+  });
+
+  it("uses one offset for weekdays on opposite sides of a daylight-saving change", () => {
+    const now = new Date(2026, 2, 5, 12);
+    const value = { cadence: "weekly" as const, time: "19:30", daysOfWeek: [0, 6] };
+    expect(cadenceToCron(value, now)).toBe("30 0 * * 0,1");
+    expect(cronToCadence("30 0 * * 0,1", now)).toEqual(value);
+  });
+
+  it("moves an early local Monday to the previous UTC Sunday", () => {
+    const previous = process.env.TZ;
+    process.env.TZ = "Asia/Kolkata";
+    try {
+      const now = new Date(2026, 0, 14, 12);
+      const value = { cadence: "weekly" as const, time: "00:15", daysOfWeek: [1, 5] };
+      expect(cadenceToCron(value, now)).toBe("45 18 * * 0,4");
+      expect(cronToCadence("45 18 * * 0,4", now)).toEqual(value);
+    } finally {
+      process.env.TZ = previous;
+    }
+  });
+
   it("returns null for a cron this UI never produces (explicit month field)", () => {
     expect(cronToCadence("0 14 1 6 *", NOW)).toBeNull();
   });
@@ -139,10 +241,48 @@ describe("cronToCadence", () => {
     expect(cronToCadence("not a cron", NOW)).toBeNull();
   });
 
+  it.each([
+    "0 14 * * 1-5",
+    "0 14 * * 1,3,3",
+    "0 14 * * 1,8",
+    "0 14 * * 7",
+    "0 14 * * 1,,3",
+    "0 14 * * NaN",
+    "60 14 * * 1,5",
+    "0 24 * * 1,5",
+    "1e1 14 * * 1,5",
+  ])("returns null for a non-canonical weekday list: %s", (cron) => {
+    expect(cronToCadence(cron, NOW)).toBeNull();
+  });
+
   it("returns null for a day-of-month outside 1-28, rather than clamping to a fabricated day", () => {
     // day 30, 12:00 UTC -> 07:00 EST, same calendar day -- a real day-30
     // schedule this UI could never have set (the picker only offers 1-28),
     // so it must be rejected, not silently reported as some other day.
     expect(cronToCadence("0 12 30 * *", NOW)).toBeNull();
   });
+
+  it.each(["UTC", "America/New_York", "Asia/Kolkata"])(
+    "preserves unsupported month-end schedules in every month in %s",
+    (timezone) => {
+      const previous = process.env.TZ;
+      process.env.TZ = timezone;
+      try {
+        for (const year of [2026, 2028]) {
+          for (let month = 0; month < 12; month += 1) {
+            const now = new Date(year, month, 15, 12);
+            for (const day of [29, 30, 31]) {
+              expect(cronToCadence(`0 12 ${day} * *`, now)).toBeNull();
+            }
+            expect(cronToCadence("0 12 28 * *", now)).toMatchObject({
+              cadence: "monthly",
+              dayOfMonth: 28,
+            });
+          }
+        }
+      } finally {
+        process.env.TZ = previous;
+      }
+    },
+  );
 });

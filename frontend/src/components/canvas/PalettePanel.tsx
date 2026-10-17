@@ -10,153 +10,9 @@ import {
 import { WorkflowNode } from "@/lib/types";
 import { BrandLogo } from "./nodes/brandLogos";
 import { PALETTE_TWO_COL_MIN } from "./panelSizing";
-import {
-  TRIGGER_TEMPLATES,
-  AGENT_TEMPLATES,
-  PROVIDER_TEMPLATES,
-  TOOL_TEMPLATES,
-  ACTION_TEMPLATES,
-  ACTION_CATEGORIES,
-  END_TEMPLATES,
-  TENDRIL_TEMPLATES,
-  GOOGLE_TEMPLATES,
-} from "@/lib/data";
+import { ACTION_CATEGORIES } from "@/lib/data";
 import { IconSearch } from "@/components/ui";
-
-const PALETTE_TABS = [
-  {
-    id: "triggers",
-    label: "Triggers",
-    items: () => TRIGGER_TEMPLATES,
-    type: "trigger",
-    dotColor: "mute" as const,
-    map: (it: (typeof TRIGGER_TEMPLATES)[0]): Partial<WorkflowNode> => ({
-      type: "trigger",
-      template: it.id,
-      label: it.name,
-      icon: it.icon,
-      sub: it.desc,
-    }),
-  },
-  {
-    id: "agents",
-    label: "Agents",
-    items: () => AGENT_TEMPLATES,
-    type: "agent",
-    dotColor: "accent" as const,
-    map: (it: (typeof AGENT_TEMPLATES)[0]): Partial<WorkflowNode> => ({
-      type: "agent",
-      template: it.id,
-      name: it.name,
-      icon: it.icon,
-      sub: it.desc,
-    }),
-  },
-  {
-    id: "providers",
-    label: "Providers",
-    items: () => PROVIDER_TEMPLATES,
-    type: "provider",
-    dotColor: "accent" as const,
-    map: (it: (typeof PROVIDER_TEMPLATES)[0]): Partial<WorkflowNode> => ({
-      type: "provider",
-      template: it.id,
-      name: it.name,
-      icon: it.icon,
-      sub: it.model,
-      model: it.model,
-    }),
-  },
-  {
-    id: "tools",
-    label: "Tools",
-    items: () => TOOL_TEMPLATES,
-    type: "tool",
-    dotColor: "mute" as const,
-    map: (it: (typeof TOOL_TEMPLATES)[0]): Partial<WorkflowNode> => ({
-      type: "tool",
-      template: it.id,
-      name: it.name,
-      icon: it.icon,
-      sub: it.desc,
-    }),
-  },
-  {
-    // No preset list: every x402 endpoint is different money moving to a
-    // different real place, so this tab offers only the "New x402
-    // Endpoint" custom creator below (paste URL -> Discover probes the
-    // live 402 challenge for method/price). A prior preset list here
-    // (Tavily/Firecrawl/etc.) pointed at invented hostnames nothing
-    // real answers to -- removed rather than fixed in place.
-    id: "x402",
-    label: "x402",
-    items: () => [] as never[],
-    type: "tool402",
-    dotColor: "magenta" as const,
-    map: (): Partial<WorkflowNode> => ({ type: "tool402" }),
-  },
-  {
-    id: "tendril",
-    label: "Tendril",
-    items: () => TENDRIL_TEMPLATES,
-    type: "tendril",
-    dotColor: "magenta" as const,
-    map: (it: (typeof TENDRIL_TEMPLATES)[0]): Partial<WorkflowNode> => ({
-      type: "tendril",
-      template: it.id,
-      name: it.name,
-      icon: it.icon,
-      sub: it.desc,
-      tendrilAction: it.action,
-      tendrilHours: "1",
-      tendrilAmount: "10",
-    }),
-  },
-  {
-    id: "actions",
-    label: "Actions",
-    items: () => ACTION_TEMPLATES,
-    type: "action",
-    dotColor: "mute" as const,
-    map: (it: (typeof ACTION_TEMPLATES)[0]): Partial<WorkflowNode> => ({
-      type: "action",
-      template: it.id,
-      name: it.name,
-      icon: it.icon,
-      sub: it.desc,
-    }),
-  },
-  {
-    id: "google",
-    label: "Google",
-    items: () => GOOGLE_TEMPLATES,
-    type: "google",
-    dotColor: "accent" as const,
-    map: (it: (typeof GOOGLE_TEMPLATES)[0]): Partial<WorkflowNode> => ({
-      type: "google",
-      template: it.id,
-      name: it.name,
-      icon: it.icon,
-      sub: it.desc,
-    }),
-  },
-  {
-    id: "end",
-    label: "End",
-    items: () => END_TEMPLATES,
-    type: "end",
-    dotColor: "mute" as const,
-    map: (it: (typeof END_TEMPLATES)[0]): Partial<WorkflowNode> => ({
-      type: "end",
-      template: it.id,
-      label: it.name,
-      icon: it.icon,
-      sub: it.desc,
-    }),
-  },
-] as const;
-
-type TabId = (typeof PALETTE_TABS)[number]["id"];
+import { PALETTE_TABS, CREATE_META, type TabId } from "./paletteTabs";
 
 // ── Actions-tab search & grouping ───────────────────────────────────────────
 // Scoped entirely to the Actions tab (see `isActions` below) -- the rest of
@@ -195,7 +51,7 @@ function highlightMatch(text: string, q: string): React.ReactNode {
         style={{
           background: "var(--accent-soft)",
           color: "var(--accent)",
-          borderRadius: "var(--r-1)",
+          borderRadius: 2,
         }}
       >
         {text.slice(idx, idx + q.length)}
@@ -205,82 +61,6 @@ function highlightMatch(text: string, q: string): React.ReactNode {
   );
 }
 
-const CREATE_META: Record<string, Partial<WorkflowNode>> = {
-  triggers: {
-    type: "trigger",
-    custom: true,
-    label: "Custom Trigger",
-    icon: "✳",
-    sub: "define your own",
-  },
-  agents: {
-    type: "agent",
-    custom: true,
-    name: "Custom Agent",
-    icon: "◇",
-    sub: "your own agent",
-    systemPrompt: "You are a helpful agent.",
-  },
-  providers: {
-    type: "provider",
-    custom: true,
-    name: "Custom Provider",
-    icon: "+",
-    sub: "model + API key",
-    model: "custom-model",
-  },
-  tools: {
-    type: "tool",
-    custom: true,
-    name: "Custom Tool",
-    icon: "⟶",
-    sub: "any HTTP endpoint",
-  },
-  x402: {
-    type: "tool402",
-    custom: true,
-    name: "New x402 Endpoint",
-    icon: "✦",
-    sub: "paste URL · auto-price",
-  },
-  tendril: {
-    type: "tendril",
-    custom: true,
-    name: "Custom Tendril",
-    icon: "▣",
-    sub: "rent · run · release",
-    tendrilAction: "rent",
-    tendrilHours: "1",
-    tendrilAmount: "10",
-  },
-  actions: {
-    type: "action",
-    custom: true,
-    name: "Custom Action",
-    icon: "✦",
-    sub: "your own action",
-  },
-  // Google has no "custom operation" concept -- all 11 real ones (Gmail/
-  // Sheets/Calendar/Drive) are already listed individually below. This
-  // create-row defaults to the most common one (send) purely so dragging
-  // the dashed "+" card behaves consistently with every other tab; picking
-  // a different Google row below is the normal way to get a different op.
-  google: {
-    type: "google",
-    custom: true,
-    name: "Custom Gmail Send",
-    icon: "✉",
-    sub: "or drag a specific op below",
-    template: "gmail_send",
-  },
-  end: {
-    type: "end",
-    custom: true,
-    label: "Custom End",
-    icon: "■",
-    sub: "define your own",
-  },
-};
 
 interface PalettePanelProps {
   onDragNodeStart: (e: React.DragEvent, meta: Partial<WorkflowNode>) => void;
@@ -339,6 +119,7 @@ export function PalettePanel({
   }, [width, syncWidth]);
 
   const tabDef = PALETTE_TABS.find((t) => t.id === tab)!;
+  const createMeta = CREATE_META[tab];
   const items = tabDef.items() as unknown[];
   const mapped = useMemo(
     () =>
@@ -483,14 +264,14 @@ export function PalettePanel({
             display: "flex",
             alignItems: "center",
             justifyContent: "space-between",
-            gap: "var(--s-3)",
+            gap: 8,
             marginBottom: 10,
           }}
         >
           <span
             style={{
               fontFamily: "var(--font-mono)",
-              fontSize: "var(--t-0)",
+              fontSize: 10,
               textTransform: "uppercase",
               letterSpacing: "0.08em",
               color: "var(--fg-dim)",
@@ -516,7 +297,7 @@ export function PalettePanel({
                 borderRadius: "var(--r-1)",
                 color: "var(--fg-muted)",
                 cursor: "pointer",
-                fontSize: "var(--t-2)",
+                fontSize: 12,
                 lineHeight: 1,
               }}
             >
@@ -528,7 +309,7 @@ export function PalettePanel({
           style={{
             display: "grid",
             gridTemplateColumns: "repeat(3, 1fr)",
-            gap: "var(--s-1)",
+            gap: 4,
             background: "var(--bg)",
             padding: 3,
             borderRadius: "var(--r-2)",
@@ -545,8 +326,8 @@ export function PalettePanel({
                 cursor: "pointer",
                 background: tab === t.id ? "var(--bg-elev-3)" : "transparent",
                 color: tab === t.id ? "var(--fg)" : "var(--fg-muted)",
-                borderRadius: "var(--r-2)",
-                fontSize: "var(--t-1)",
+                borderRadius: 5,
+                fontSize: 11,
                 fontWeight: 500,
                 fontFamily: "var(--font-sans)",
               }}
@@ -580,7 +361,7 @@ export function PalettePanel({
               borderRadius: "var(--r-2)",
               color: "var(--fg)",
               fontFamily: "var(--font-sans)",
-              fontSize: "var(--t-2)",
+              fontSize: 12,
               outline: "none",
             }}
             placeholder={`search ${tabDef.label.toLowerCase()}…`}
@@ -592,7 +373,7 @@ export function PalettePanel({
           <div
             style={{
               fontFamily: "var(--font-mono)",
-              fontSize: "var(--t-0)",
+              fontSize: 10,
               color: "var(--fg-dim)",
               marginTop: 6,
               paddingLeft: 2,
@@ -612,7 +393,7 @@ export function PalettePanel({
           display: "grid",
           gridTemplateColumns: `repeat(${cols}, minmax(0, 1fr))`,
           alignContent: "start",
-          gap: "var(--s-2)",
+          gap: 6,
           overflowY: "auto",
           flex: 1,
         }}
@@ -620,12 +401,10 @@ export function PalettePanel({
         {/* Create row -- always spans the full width, above the grid */}
         <div style={{ gridColumn: "1 / -1" }}>
           <CreateRow
-            meta={CREATE_META[tab]}
-            onDragStart={(e) => onDragNodeStart(e, CREATE_META[tab])}
-            onActivate={
-              onAddNode ? () => onAddNode(CREATE_META[tab]) : undefined
-            }
-            label={(CREATE_META[tab].label ?? "node") as string}
+            meta={createMeta}
+            onDragStart={(e) => onDragNodeStart(e, createMeta)}
+            onActivate={onAddNode ? () => onAddNode(createMeta) : undefined}
+            label={(createMeta.name ?? createMeta.label ?? "node") as string}
             isX402={tab === "x402"}
           />
         </div>
@@ -667,7 +446,7 @@ export function PalettePanel({
                     <div
                       style={{
                         fontFamily: "var(--font-mono)",
-                        fontSize: "var(--t-0)",
+                        fontSize: 10,
                         textTransform: "uppercase",
                         letterSpacing: "0.08em",
                         color: "var(--fg-dim)",
@@ -680,7 +459,7 @@ export function PalettePanel({
                       style={{
                         display: "grid",
                         gridTemplateColumns: `repeat(${cols}, minmax(0, 1fr))`,
-                        gap: "var(--s-2)",
+                        gap: 6,
                       }}
                     >
                       {group.map((e, i) => (
@@ -725,7 +504,7 @@ export function PalettePanel({
               gridColumn: "1 / -1",
               padding: "24px 8px",
               fontFamily: "var(--font-mono)",
-              fontSize: "var(--t-1)",
+              fontSize: 11,
               color: "var(--fg-dim)",
               textAlign: "center",
             }}
@@ -741,7 +520,7 @@ export function PalettePanel({
           padding: 14,
           borderTop: "1px solid var(--border)",
           fontFamily: "var(--font-mono)",
-          fontSize: "var(--t-0)",
+          fontSize: 10,
           color: "var(--fg-dim)",
           lineHeight: 1.5,
         }}
@@ -766,7 +545,7 @@ function CreateRow({
   label?: string;
   isX402: boolean;
 }) {
-  const accent = isX402 ? "var(--type-x402)" : "var(--accent)";
+  const accent = isX402 ? "#E879F9" : "var(--accent)";
   const bg = isX402 ? "rgba(232, 121, 249, 0.06)" : "var(--accent-soft)";
   const bgHover = isX402 ? "rgba(232, 121, 249, 0.12)" : "var(--accent-soft)";
 
@@ -788,7 +567,7 @@ function CreateRow({
       style={{
         display: "flex",
         alignItems: "center",
-        gap: "var(--s-3)",
+        gap: 10,
         padding: "9px 10px",
         background: bg,
         border: `1px dashed ${accent}`,
@@ -806,14 +585,14 @@ function CreateRow({
         style={{
           width: 22,
           height: 22,
-          borderRadius: "var(--r-2)",
+          borderRadius: 6,
           background: "var(--bg)",
           color: accent,
           border: `1px solid ${accent}`,
           display: "inline-flex",
           alignItems: "center",
           justifyContent: "center",
-          fontSize: "var(--t-4)",
+          fontSize: 14,
           flexShrink: 0,
           fontWeight: 600,
         }}
@@ -821,13 +600,13 @@ function CreateRow({
         +
       </span>
       <div style={{ flex: 1, minWidth: 0 }}>
-        <div style={{ fontSize: "var(--t-2)", fontWeight: 600, color: accent }}>
+        <div style={{ fontSize: 12, fontWeight: 600, color: accent }}>
           {(meta.name ?? meta.label) as string}
         </div>
         <div
           style={{
             fontFamily: "var(--font-mono)",
-            fontSize: "var(--t-0)",
+            fontSize: 10,
             color: "var(--fg-muted)",
             whiteSpace: "nowrap",
             overflow: "hidden",
@@ -877,7 +656,7 @@ function DraggableRow({
           : "var(--bg-elev-3)";
   const dotFg =
     dotColor === "magenta"
-      ? "var(--type-x402)"
+      ? "#E879F9"
       : dotColor === "accent"
         ? "var(--accent)"
         : dotColor === "info"
@@ -902,7 +681,7 @@ function DraggableRow({
       style={{
         display: "flex",
         alignItems: "center",
-        gap: "var(--s-3)",
+        gap: 10,
         padding: "8px 10px",
         background: "var(--bg-elev-2)",
         border: "1px solid var(--border)",
@@ -921,13 +700,13 @@ function DraggableRow({
         style={{
           width: 22,
           height: 22,
-          borderRadius: "var(--r-2)",
+          borderRadius: 6,
           background: dotBg,
           color: dotFg,
           display: "inline-flex",
           alignItems: "center",
           justifyContent: "center",
-          fontSize: "var(--t-2)",
+          fontSize: 12,
           flexShrink: 0,
           fontWeight: 600,
         }}
@@ -935,19 +714,13 @@ function DraggableRow({
         <BrandLogo template={template} fallback={icon} size={14} />
       </span>
       <div style={{ flex: 1, minWidth: 0 }}>
-        <div
-          style={{
-            fontSize: "var(--t-2)",
-            fontWeight: 500,
-            color: "var(--fg)",
-          }}
-        >
+        <div style={{ fontSize: 12, fontWeight: 500, color: "var(--fg)" }}>
           {titleNode ?? title}
         </div>
         <div
           style={{
             fontFamily: "var(--font-mono)",
-            fontSize: "var(--t-0)",
+            fontSize: 10,
             color: "var(--fg-muted)",
             whiteSpace: "nowrap",
             overflow: "hidden",

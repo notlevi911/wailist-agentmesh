@@ -105,8 +105,11 @@ export function Topbar() {
       <AppNav
         items={navItems}
         pathname={pathname}
-        onSelect={(item: NavItem) => {
-          if (item.href) router.push(item.href);
+        onSelect={(item: NavItem, options) => {
+          if (item.href) {
+            if (options?.replace) router.replace(item.href);
+            else router.push(item.href);
+          }
         }}
         renderInlineLink={({ item, active, onClick }) => (
           <NavLink label={item.label} active={active} onClick={onClick} />
@@ -202,7 +205,7 @@ export function Topbar() {
                             color: "var(--fg)",
                           }}
                         >
-                          {user?.name?.trim() || "—"}
+                          {user?.name?.trim() || "-"}
                         </div>
                         <div
                           style={{
@@ -213,17 +216,29 @@ export function Topbar() {
                             whiteSpace: "nowrap",
                           }}
                         >
-                          {user?.email ?? "—"}
+                          {user?.email ?? "-"}
                         </div>
                       </div>
                     </div>
-                    {/* Native only: there is no FCM in a browser, so on the
-                        web this would be a control that cannot do anything.
-                        The Settings item that used to sit here was removed --
-                        its onClick only closed the menu, because /settings
-                        does not exist on this branch, and shipping a working
-                        item beside a dead one is worse than shipping neither.
-                        #57 restores it along with the page it needs. */}
+                    <div className="profile-menu__divider" />
+                    <button
+                      className="profile-menu__item"
+                      onClick={() => {
+                        setMenuState("closed");
+                        router.push("/settings");
+                      }}
+                    >
+                      Settings
+                    </button>
+                    <button
+                      className="profile-menu__item"
+                      onClick={() => {
+                        setMenuState("closed");
+                        router.push("/settings#delete-title");
+                      }}
+                    >
+                      Delete account
+                    </button>
                     {IS_NATIVE && (
                       <>
                         <div className="profile-menu__divider" />

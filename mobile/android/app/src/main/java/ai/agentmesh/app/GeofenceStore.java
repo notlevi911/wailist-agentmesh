@@ -74,6 +74,12 @@ final class GeofenceStore {
         }
     }
 
+    static boolean clear(Context context) {
+        synchronized (LOCK) {
+            return prefs(context).edit().remove(KEY_FENCES).commit();
+        }
+    }
+
     static List<Active> loadAll(Context context) {
         JSONObject fences;
         synchronized (LOCK) {

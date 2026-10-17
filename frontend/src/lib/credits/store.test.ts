@@ -215,6 +215,8 @@ describe("resetCredits", () => {
     expect(readCredits().balanceUSD).toBe(42);
     expect(readCreditsFlags()).toEqual({
       balanceKnown: true,
+      balanceLoading: false,
+      balanceFailed: false,
       purchasesKnown: true,
       purchasesFailed: false,
     });
@@ -228,6 +230,8 @@ describe("resetCredits", () => {
     // purchases" rather than as still loading.
     expect(readCreditsFlags()).toEqual({
       balanceKnown: false,
+      balanceLoading: false,
+      balanceFailed: false,
       purchasesKnown: false,
       purchasesFailed: false,
     });
@@ -292,6 +296,8 @@ describe("refreshPurchases failure handling", () => {
     // is indistinguishable from an account that never paid.
     expect(store.readCreditsFlags()).toEqual({
       balanceKnown: false,
+      balanceLoading: false,
+      balanceFailed: false,
       purchasesKnown: false,
       purchasesFailed: true,
     });
@@ -302,5 +308,29 @@ describe("refreshPurchases failure handling", () => {
     expect(store.readCredits().purchases).toHaveLength(1);
     expect(store.readCreditsFlags().purchasesFailed).toBe(false);
     expect(store.readCreditsFlags().purchasesKnown).toBe(true);
+  });
+});
+
+describe("account warning threshold", () => {
+  it("keeps exact preference precision and resets it with the account", async () => {
+    const store = await freshStore();
+    expect(store.readCredits().lowBalanceThresholdUSD).toBe(5);
+    store.setAccountThreshold("owner", 1_234_567);
+    expect(store.readCredits().lowBalanceThresholdUSD).toBe(1.234567);
+    store.setAccountThreshold("owner", 0);
+    expect(store.readCredits().lowBalanceThresholdUSD).toBe(0);
+    store.resetCredits();
+    expect(store.readCredits().lowBalanceThresholdUSD).toBe(5);
+    expect(window.localStorage.length).toBe(0);
+  });
+  it("drops prior money data when a different owner is identified", async () => {
+    const store = await freshStore();
+    store.setAccountThreshold("old-owner", 9_000_000);
+    balanceMock.mockResolvedValue(20);
+    await store.refreshBalance();
+    store.setAccountThreshold("new-owner", 2_000_000);
+    expect(store.readCredits().balanceUSD).toBe(0);
+    expect(store.readCreditsFlags().balanceKnown).toBe(false);
+    expect(store.readCredits().lowBalanceThresholdUSD).toBe(2);
   });
 });

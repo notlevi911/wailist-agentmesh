@@ -11,6 +11,7 @@ import (
 	"github.com/agentmesh/backend/internal/engine/nodes"
 	"github.com/agentmesh/backend/internal/models"
 	"github.com/agentmesh/backend/internal/sse"
+	"github.com/agentmesh/backend/internal/testutil"
 	"github.com/agentmesh/backend/internal/x402"
 )
 
@@ -75,6 +76,7 @@ func newTestRunner(t *testing.T) (*engine.Runner, *db.Store) {
 		t.Fatal(err)
 	}
 	t.Cleanup(store.Close)
+	testutil.EnsureUsers(t, "dev", "test-user")
 	broker := sse.NewBroker()
 	return engine.NewRunner(store, broker, &noopSigner{}, "http://localhost:8080", "", "", engine.X402Config{USDCAssetID: 10458941}), store
 }

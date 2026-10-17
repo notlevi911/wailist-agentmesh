@@ -93,10 +93,11 @@ export interface WorkflowNode {
   secrets?: Record<string, string>;
   config?: Record<string, string>;
   // tendril-specific
-  tendrilAction?: "topup" | "rent" | "run" | "release";
+  tendrilAction?: "topup" | "rent" | "run" | "release" | "auto";
   tendrilNodeId?: string;
   tendrilHours?: string;
   // USD of AgentMesh credit to convert into Tendril credit, on a topup node.
+  // On an "auto" node, this doubles as its rent budget (default $1 if unset).
   tendrilAmount?: string;
   // On a topup node: skip (no charge) when Tendril credit is already at or
   // above this many USD. Empty = always top up.

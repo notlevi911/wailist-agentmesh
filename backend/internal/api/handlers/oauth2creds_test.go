@@ -54,8 +54,16 @@ func TestOAuth2CredStart_RedirectsToConsentScreenWithOfflineAccess(t *testing.T)
 		t.Error("want a non-empty state param")
 	}
 	if !strings.Contains(q.Get("scope"), "gmail.send") || !strings.Contains(q.Get("scope"), "spreadsheets") ||
-		!strings.Contains(q.Get("scope"), "calendar") || !strings.Contains(q.Get("scope"), "drive.readonly") {
-		t.Errorf("want all four Google product scopes requested in one consent screen, got %q", q.Get("scope"))
+		!strings.Contains(q.Get("scope"), "calendar") || !strings.Contains(q.Get("scope"), "userinfo.email") {
+		t.Errorf("want the three Google product scopes plus userinfo.email requested in one consent screen, got %q", q.Get("scope"))
+	}
+	// Restricted scopes cannot pass Google's OAuth verification without a paid
+	// CASA assessment; requesting one would put the whole consent screen back
+	// behind the "unverified app" warning.
+	for _, restricted := range []string{"gmail.readonly", "gmail.modify", "mail.google.com", "drive.readonly", "auth/drive "} {
+		if strings.Contains(q.Get("scope")+" ", restricted) {
+			t.Errorf("restricted scope %q requested: %q", restricted, q.Get("scope"))
+		}
 	}
 	if len(rec.Result().Cookies()) == 0 {
 		t.Error("want a state cookie set")
@@ -248,7 +256,7 @@ func TestOAuth2CredCallback_StoresGrantedScopesNotRequestedScopes(t *testing.T) 
 	// the stored Scopes column must reflect that subset, not silently
 	// claim the full set that was requested.
 	googleMockServers(t,
-		`{"access_token":"x","refresh_token":"y","expires_in":3600,"scope":"https://www.googleapis.com/auth/gmail.readonly"}`,
+		`{"access_token":"x","refresh_token":"y","expires_in":3600,"scope":"https://www.googleapis.com/auth/gmail.send"}`,
 		`{"email":"partial@gmail.com"}`)
 
 	rec := httptest.NewRecorder()
@@ -261,7 +269,7 @@ func TestOAuth2CredCallback_StoresGrantedScopesNotRequestedScopes(t *testing.T) 
 	if err != nil || len(creds) != 1 {
 		t.Fatalf("want exactly 1 persisted credential, got %d (err %v)", len(creds), err)
 	}
-	if creds[0].Scopes != "https://www.googleapis.com/auth/gmail.readonly" {
+	if creds[0].Scopes != "https://www.googleapis.com/auth/gmail.send" {
 		t.Errorf("want only the granted scope stored, got %q", creds[0].Scopes)
 	}
 	if strings.Contains(creds[0].Scopes, "spreadsheets") {
@@ -369,5 +377,31 @@ func TestOAuth2CredDelete_DeniesOtherUser(t *testing.T) {
 	remaining, _ := d.Store.ListOAuthCredentials(ctx, owner.ID, "google")
 	if len(remaining) != 1 {
 		t.Error("want the owner's credential untouched")
+	}
+}
+
+func TestOAuth2CredListAllProvidersIsOwnedAndMasked(t *testing.T) {
+	d := oauth2Deps(t)
+	owner := deletionUser(t, d, "")
+	other := deletionUser(t, d, "")
+	for _, fixture := range []struct{ owner, provider, label string }{{owner.ID, "google", "first"}, {owner.ID, "second-provider", "second"}, {other.ID, "google", "other"}} {
+		if _, err := d.Store.InsertOAuthCredential(t.Context(), models.OAuthCredential{UserID: fixture.owner, Provider: fixture.provider, AccountLabel: fixture.label, AccessTokenEnc: "private-access-ciphertext", RefreshTokenEnc: "private-refresh-ciphertext"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	rec := httptest.NewRecorder()
+	d.OAuth2CredList(rec, withUser(httptest.NewRequest(http.MethodGet, "/oauth2/credentials", nil), owner.ID))
+	body := rec.Body.String()
+	var got []models.OAuthCredential
+	if err := json.Unmarshal([]byte(body), &got); err != nil || rec.Code != 200 || len(got) != 2 {
+		t.Fatalf("all providers: %d %s %v", rec.Code, body, err)
+	}
+	for _, credential := range got {
+		if credential.UserID != owner.ID {
+			t.Fatal("other owner credential returned")
+		}
+	}
+	if strings.Contains(body, "ciphertext") || strings.Contains(body, "TokenEnc") {
+		t.Fatal("stored token returned")
 	}
 }

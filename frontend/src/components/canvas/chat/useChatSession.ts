@@ -27,6 +27,13 @@ export interface ChatMessage {
   runId?: string;
   /** An assistant turn still waiting on its run. */
   pending?: boolean;
+  /**
+   * A chat build's turn. It settles by id when the build returns and never
+   * belongs to a run, so attachRun must not bind a run to it: a run started
+   * while the build is in flight (the topbar Run button) would otherwise land
+   * on this turn, and its outcome would never reach the chat (#67).
+   */
+  build?: boolean;
   isError?: boolean;
   /**
    * The turn was stranded — a reload cut it off from its run. Distinct from
@@ -52,9 +59,10 @@ export interface ChatSession {
   /**
    * Records the user's turn plus the pending assistant turn awaiting it.
    * Returns the assistant turn's id so the caller can settle that exact turn
-   * if the run never starts.
+   * if the run never starts. Pass `build: true` for a chat build's turn, so
+   * no run can be bound to it (see ChatMessage.build).
    */
-  startTurn: (text: string) => string;
+  startTurn: (text: string, opts?: { build?: boolean }) => string;
   /** Binds the pending turn to the run the backend actually started. */
   attachRun: (runId: string) => void;
   /** Fills in the turn bound to this run. */
@@ -98,14 +106,17 @@ interface StoredSession {
  * a reload sits earlier in the transcript than anything sent afterwards, so
  * matching the first pending would hand a fresh turn's answer to the stale
  * bubble. UNBOUND rather than merely pending: without it a second run could
- * rebind its id onto a turn already waiting on a different run.
+ * rebind its id onto a turn already waiting on a different run. A build turn
+ * is never a candidate: it is pending with no runId for the whole build, yet
+ * no run will ever belong to it (see ChatMessage.build).
  *
  * Exported for tests -- this predicate is what keeps a run attached to the
  * turn that started it.
  */
 export function lastUnboundPendingIndex(messages: ChatMessage[]): number {
   for (let i = messages.length - 1; i >= 0; i--) {
-    if (messages[i].pending && !messages[i].runId) return i;
+    const m = messages[i];
+    if (m.pending && !m.runId && !m.build) return i;
   }
   return -1;
 }
@@ -381,26 +392,30 @@ export function useChatSession(
     return () => clearTimeout(t);
   }, [hydrated, loaded, sessionId, messages]);
 
-  const startTurn = useCallback((text: string): string => {
-    const now = new Date().toISOString();
-    // Ids are built outside the updater so the assistant turn's id can be
-    // returned; deriving them from prev.length kept them inside the closure
-    // and left the caller with no handle on the turn it had just created.
-    const seq = Math.random().toString(36).slice(2, 8);
-    const assistantId = `a-${now}-${seq}`;
-    setMessages((prev) => [
-      ...prev,
-      { id: `u-${now}-${seq}`, sender: "user", text, ts: now },
-      {
-        id: assistantId,
-        sender: "assistant",
-        text: "",
-        ts: now,
-        pending: true,
-      },
-    ]);
-    return assistantId;
-  }, []);
+  const startTurn = useCallback(
+    (text: string, opts?: { build?: boolean }): string => {
+      const now = new Date().toISOString();
+      // Ids are built outside the updater so the assistant turn's id can be
+      // returned; deriving them from prev.length kept them inside the closure
+      // and left the caller with no handle on the turn it had just created.
+      const seq = Math.random().toString(36).slice(2, 8);
+      const assistantId = `a-${now}-${seq}`;
+      setMessages((prev) => [
+        ...prev,
+        { id: `u-${now}-${seq}`, sender: "user", text, ts: now },
+        {
+          id: assistantId,
+          sender: "assistant",
+          text: "",
+          ts: now,
+          pending: true,
+          ...(opts?.build ? { build: true } : {}),
+        },
+      ]);
+      return assistantId;
+    },
+    [],
+  );
 
   const attachRun = useCallback((runId: string) => {
     setMessages((prev) => attachRunIn(prev, runId));

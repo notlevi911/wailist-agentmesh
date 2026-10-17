@@ -5,6 +5,7 @@ import static org.junit.Assert.assertTrue;
 
 import android.content.Context;
 import android.content.SharedPreferences;
+import android.location.Location;
 
 import androidx.test.core.app.ApplicationProvider;
 
@@ -41,6 +42,36 @@ public class GeofenceStoreTest {
     @Test
     public void loadAll_onFreshStore_isEmpty() {
         assertTrue(GeofenceStore.loadAll(context).isEmpty());
+    }
+
+    @Test
+    public void clear_removesEveryFenceBeforeRebootRecovery() {
+        GeofenceStore.save(context, "workflow-1", 12.5, 77.5, 150.0);
+        GeofenceStore.save(context, "workflow-2", -33.9, 151.2, 200.0);
+        assertTrue(GeofenceStore.clear(context));
+        assertTrue(GeofenceStore.loadAll(context).isEmpty());
+        SharedPreferences raw = context.getSharedPreferences("AgentMeshGeofenceStore", Context.MODE_PRIVATE);
+        assertTrue(!raw.contains("fences"));
+    }
+
+    @Test
+    public void deletedFence_cannotQueueALateLocationBroadcast() throws Exception {
+        GeofenceStore.save(context, "workflow-1", 12.5, 77.5, 150.0);
+        GeofenceReceiver receiver = new GeofenceReceiver();
+        java.lang.reflect.Method append = GeofenceReceiver.class.getDeclaredMethod(
+                "append", Context.class, String.class, Location.class);
+        append.setAccessible(true);
+        Location location = new Location("test");
+        location.setLatitude(12.5);
+        location.setLongitude(77.5);
+        SharedPreferences queue = context.getSharedPreferences(GeofenceReceiver.PREFS, Context.MODE_PRIVATE);
+        append.invoke(receiver, context, "workflow-1", location);
+        assertTrue(queue.contains(GeofenceReceiver.QUEUE_KEY));
+        queue.edit().remove(GeofenceReceiver.QUEUE_KEY).commit();
+
+        assertTrue(GeofenceStore.clear(context));
+        append.invoke(receiver, context, "workflow-1", location);
+        assertTrue(!queue.contains(GeofenceReceiver.QUEUE_KEY));
     }
 
     @Test

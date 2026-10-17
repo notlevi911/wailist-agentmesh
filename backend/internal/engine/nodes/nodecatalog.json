@@ -1954,54 +1954,8 @@
     },
     {
       "type": "google",
-      "desc": "Gmail, Sheets, Calendar and Drive, through one Google account the user links in the Inspector.",
+      "desc": "Gmail sending, Sheets and Calendar, through one Google account the user links in the Inspector.",
       "templates": [
-        {
-          "id": "gmail_list",
-          "name": "Gmail: List Messages",
-          "desc": "Search/list inbox messages",
-          "kind": "read",
-          "fields": [
-            {
-              "key": "oauthCredentialID",
-              "where": "connection",
-              "label": "Google account",
-              "hint": "the user links a Google account in the Inspector"
-            },
-            {
-              "key": "gmailQuery",
-              "where": "config",
-              "label": "Query",
-              "hint": "Gmail search syntax, e.g. is:unread from:someone@x.com"
-            },
-            {
-              "key": "gmailMaxResults",
-              "where": "config",
-              "label": "Max results",
-              "placeholder": "10"
-            }
-          ]
-        },
-        {
-          "id": "gmail_get",
-          "name": "Gmail: Get Message",
-          "desc": "Read one message's content",
-          "kind": "read",
-          "fields": [
-            {
-              "key": "oauthCredentialID",
-              "where": "connection",
-              "label": "Google account",
-              "hint": "the user links a Google account in the Inspector"
-            },
-            {
-              "key": "gmailMessageID",
-              "where": "config",
-              "label": "Message ID",
-              "hint": "e.g. {{ result.id }} from an upstream Gmail: List step"
-            }
-          ]
-        },
         {
           "id": "gmail_send",
           "name": "Gmail: Send Message",
@@ -2193,64 +2147,94 @@
               "hint": "what this step sends; blank sends the previous step's output. {{ result }} / {{ result.field }} / {{ node.<id> }} / {{ state.key }} interpolate"
             }
           ]
-        },
+        }
+      ]
+    },
+    {
+      "type": "state",
+      "desc": "Values that persist between runs of this workflow (a cursor, a counter, the last price seen). Read anywhere as {{state.key}}.",
+      "templates": [
         {
-          "id": "drive_list",
-          "name": "Drive: List Files",
-          "desc": "Search/list files",
-          "kind": "read",
+          "id": "get",
+          "name": "Read State",
+          "desc": "Load a saved value",
+          "kind": "compute",
+          "presets": {
+            "stateOp": "get"
+          },
           "fields": [
             {
-              "key": "oauthCredentialID",
-              "where": "connection",
-              "label": "Google account",
-              "hint": "the user links a Google account in the Inspector"
-            },
-            {
-              "key": "driveQuery",
-              "where": "config",
-              "label": "Query",
-              "hint": "Drive search syntax, e.g. name contains 'report'"
+              "key": "stateKey",
+              "where": "field",
+              "label": "Key",
+              "hint": "persists across runs",
+              "placeholder": "lastRowId"
             }
           ]
         },
         {
-          "id": "drive_get",
-          "name": "Drive: Get File Info",
-          "desc": "Read file metadata",
-          "kind": "read",
+          "id": "set",
+          "name": "Write State",
+          "desc": "Save a value for next run",
+          "kind": "action",
+          "presets": {
+            "stateOp": "set"
+          },
           "fields": [
             {
-              "key": "oauthCredentialID",
-              "where": "connection",
-              "label": "Google account",
-              "hint": "the user links a Google account in the Inspector"
+              "key": "stateKey",
+              "where": "field",
+              "label": "Key",
+              "hint": "persists across runs",
+              "placeholder": "lastRowId"
             },
             {
-              "key": "driveFileID",
-              "where": "config",
-              "label": "File ID",
-              "hint": "e.g. {{ result.id }} from an upstream Drive: List step"
+              "key": "stateValue",
+              "where": "field",
+              "label": "Value",
+              "hint": "blank stores the previous step's output"
             }
           ]
         },
         {
-          "id": "drive_download",
-          "name": "Drive: Download File",
-          "desc": "Fetch file contents",
-          "kind": "read",
+          "id": "increment",
+          "name": "Counter",
+          "desc": "Add to a running total",
+          "kind": "action",
+          "presets": {
+            "stateOp": "increment"
+          },
           "fields": [
             {
-              "key": "oauthCredentialID",
-              "where": "connection",
-              "label": "Google account",
-              "hint": "the user links a Google account in the Inspector"
+              "key": "stateKey",
+              "where": "field",
+              "label": "Key",
+              "hint": "persists across runs",
+              "placeholder": "lastRowId"
             },
             {
-              "key": "driveFileID",
-              "where": "config",
-              "label": "File ID",
-              "hint": "e.g. {{ result.id }} from an upstream Drive: List step"
+              "key": "stateValue",
+              "where": "field",
+              "label": "Amount",
+              "hint": "defaults to 1"
+            }
+          ]
+        },
+        {
+          "id": "delete",
+          "name": "Clear State",
+          "desc": "Remove a saved value",
+          "kind": "action",
+          "presets": {
+            "stateOp": "delete"
+          },
+          "fields": [
+            {
+              "key": "stateKey",
+              "where": "field",
+              "label": "Key",
+              "hint": "persists across runs",
+              "placeholder": "lastRowId"
             }
           ]
         }
@@ -2260,6 +2244,25 @@
       "type": "tendril",
       "desc": "Rented Tendril compute: buy credit, rent a machine, run code on it, release it.",
       "templates": [
+        {
+          "id": "tendril_auto",
+          "name": "Auto Rent & Run",
+          "desc": "Reuses an open lease, or rents one ($1 default) and runs",
+          "kind": "action",
+          "presets": {
+            "tendrilAction": "auto",
+            "tendrilHours": "1",
+            "tendrilAmount": ""
+          },
+          "fields": [
+            {
+              "key": "tendrilAmount",
+              "where": "field",
+              "label": "Budget (USD, optional)",
+              "placeholder": "1"
+            }
+          ]
+        },
         {
           "id": "tendril_topup",
           "name": "Buy Tendril Credit",

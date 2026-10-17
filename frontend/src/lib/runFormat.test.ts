@@ -27,8 +27,8 @@ describe("formatUntil", () => {
 
   it("reads a reached time as now, and nothing as a dash", () => {
     expect(formatUntil(at(-30_000), now)).toBe("now");
-    expect(formatUntil(undefined, now)).toBe("—");
-    expect(formatUntil("soon", now)).toBe("—");
+    expect(formatUntil(undefined, now)).toBe("-");
+    expect(formatUntil("soon", now)).toBe("-");
   });
 });
 
@@ -69,7 +69,7 @@ describe("formatDuration", () => {
   });
 
   it("refuses to show a negative or unreadable duration", () => {
-    expect(formatDuration(start, "2026-09-14T09:00:00.000Z")).toBe("—");
-    expect(formatDuration("nope")).toBe("—");
+    expect(formatDuration(start, "2026-09-14T09:00:00.000Z")).toBe("-");
+    expect(formatDuration("nope")).toBe("-");
   });
 });

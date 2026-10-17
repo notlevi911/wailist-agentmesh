@@ -1,5 +1,11 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  within,
+} from "@testing-library/react";
 import { buildUsage } from "@/lib/data";
 import { workflowHref } from "@/lib/routes";
 
@@ -12,6 +18,7 @@ vi.mock("../Donut", () => ({ Donut: () => <div data-testid="donut" /> }));
 const credits = vi.hoisted(() => ({
   balanceUSD: 12.5,
   balanceKnown: true,
+  lowBalanceThresholdUSD: 5,
   refreshBalance: vi.fn(async () => {}),
 }));
 vi.mock("@/lib/credits/store", () => ({ useCredits: () => credits }));
@@ -31,6 +38,8 @@ function renderPage(over: Partial<UsagePhoneProps> = {}) {
     loading: false,
     error: null,
     onRetry: vi.fn(),
+    scopedWorkflowId: null,
+    onClearScope: vi.fn(),
     ...over,
   };
   return { ...render(<UsagePhonePage {...props} />), props };
@@ -40,6 +49,7 @@ afterEach(() => {
   cleanup();
   credits.balanceUSD = 12.5;
   credits.balanceKnown = true;
+  credits.lowBalanceThresholdUSD = 5;
 });
 
 describe("UsagePhonePage", () => {
@@ -70,7 +80,19 @@ describe("UsagePhonePage", () => {
     renderPage();
     expect(
       screen.getByRole("link", { name: /Credits left/ }).textContent,
-    ).toContain("—");
+    ).toContain("-");
+  });
+
+  it.each([
+    { threshold: 0, low: false },
+    { threshold: 1, low: false },
+    { threshold: 2, low: true },
+  ])("uses the saved threshold $threshold", ({ threshold, low }) => {
+    credits.balanceUSD = 1.2;
+    credits.lowBalanceThresholdUSD = threshold;
+    renderPage();
+    const text = screen.getByRole("link", { name: /Credits left/ }).textContent;
+    expect(text?.includes("Low")).toBe(low);
   });
 
   it("marks the chosen range and reports a new one", () => {
@@ -158,6 +180,26 @@ describe("UsagePhonePage", () => {
         .getByRole("link", { name: new RegExp(top.name) })
         .getAttribute("href"),
     ).toBe(workflowHref(top.workflowId));
+  });
+
+  it("shows and clears a workflow scope while filtering spend rows", () => {
+    const data = buildUsage("30d");
+    const scoped = data.byWorkflow.at(-1)!;
+    const { props } = renderPage({
+      data,
+      scopedWorkflowId: scoped.workflowId,
+    });
+
+    expect(
+      screen.getByText(`Workflows by spend · filtered to ${scoped.name}`),
+    ).toBeTruthy();
+    const section = screen
+      .getByRole("heading", { name: "Workflows by spend" })
+      .closest("section")!;
+    expect(within(section).getAllByRole("link")).toHaveLength(1);
+    expect(within(section).getByText(scoped.name)).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Clear" }));
+    expect(props.onClearScope).toHaveBeenCalledTimes(1);
   });
 
   it("offers a retry when nothing could be loaded", () => {

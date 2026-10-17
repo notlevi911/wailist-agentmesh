@@ -1,16 +1,13 @@
 "use client";
 import React from "react";
 
-// The toolbar under every paged list. Presentational: it owns no state,
-// because Bazaar pages the server while Workflows and Usage slice a list
-// already in memory. Those cannot share a hook, but they do share a bar.
+// Callers own pagination because Bazaar fetches pages while other lists slice locally.
 
 export const PAGE_SIZE_OPTIONS = [5, 10, 20] as const;
 export type PageSize = (typeof PAGE_SIZE_OPTIONS)[number];
 export const DEFAULT_PAGE_SIZE: PageSize = 10;
 
-// Slices an in-memory list, clamping the page so a list shortened by a filter
-// cannot strand the reader on an empty page 4.
+// Filtering can remove the selected page; clamp it to the remaining list.
 export function pageSlice<T>(
   items: T[],
   page: number,
@@ -57,7 +54,7 @@ export function Pager({
   pageSize: number;
   onPage: (next: number) => void;
   onPageSize: (next: PageSize) => void;
-  /** Plural, lowercase — "workflows", "endpoints", "settlements". */
+  /** Plural, lowercase: "workflows", "endpoints", "settlements". */
   noun?: string;
 }) {
   const canPrev = page > 0;

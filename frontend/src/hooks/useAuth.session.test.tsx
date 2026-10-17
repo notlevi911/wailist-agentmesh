@@ -25,7 +25,7 @@ vi.mock("@/lib/nativeAuth", () => ({
   getAuthToken: () => null,
   setAuthToken: vi.fn(),
 }));
-vi.mock("@/lib/credits/store", () => ({ resetCredits: vi.fn() }));
+vi.mock("@/lib/credits/store", () => ({ resetCredits: vi.fn(), setAccountThreshold: vi.fn() }));
 
 import { AuthCheckError } from "@/lib/api";
 import { useAuth } from "./useAuth";

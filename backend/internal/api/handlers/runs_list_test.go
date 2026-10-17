@@ -12,6 +12,7 @@ import (
 
 	"github.com/agentmesh/backend/internal/api/handlers"
 	"github.com/agentmesh/backend/internal/models"
+	"github.com/agentmesh/backend/internal/testutil"
 )
 
 type runPageBody struct {
@@ -31,6 +32,7 @@ func runsListOwner() string {
 // runsListWorkflowWithRuns creates a workflow owned by userID with n runs.
 func runsListWorkflowWithRuns(t *testing.T, d *handlers.Deps, userID string, n int) string {
 	t.Helper()
+	testutil.EnsureUsers(t, userID)
 	ctx := context.Background()
 	wf, err := d.Store.CreateWorkflow(ctx, "Runs List Handler", userID)
 	if err != nil {

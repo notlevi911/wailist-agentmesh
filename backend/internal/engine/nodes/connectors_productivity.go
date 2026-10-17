@@ -9,18 +9,9 @@ import (
 	"github.com/agentmesh/backend/internal/models"
 )
 
-// notionAPIBase is overridden in tests via SetNotionAPIBaseForTest.
-var notionAPIBase = "https://api.notion.com"
-
 // SetNotionAPIBaseForTest overrides the Notion API base URL. Call only from
 // tests. Pass "" to reset to the real API.
-func SetNotionAPIBaseForTest(base string) {
-	if base == "" {
-		notionAPIBase = "https://api.notion.com"
-	} else {
-		notionAPIBase = base
-	}
-}
+func SetNotionAPIBaseForTest(base string) { setAPIBaseForTest("notion", base) }
 
 func sendNotion(ctx context.Context, node models.WorkflowNode, rc RunContexter) (any, error) {
 	// OAuth-linked token takes priority: Notion's OAuth access token works
@@ -36,7 +27,7 @@ func sendNotion(ctx context.Context, node models.WorkflowNode, rc RunContexter) 
 	if pageID == "" {
 		return "notion_skipped_no_page_id", ErrActionSkipped
 	}
-	target := notionAPIBase + "/v1/blocks/" + url.PathEscape(pageID) + "/children"
+	target := apiBase("notion") + "/v1/blocks/" + url.PathEscape(pageID) + "/children"
 	payload := map[string]any{
 		"children": []map[string]any{{
 			"object": "block",
@@ -60,18 +51,9 @@ func sendNotion(ctx context.Context, node models.WorkflowNode, rc RunContexter) 
 	return doAndCheck(req, "notion_block_appended", "Notion")
 }
 
-// airtableAPIBase is overridden in tests via SetAirtableAPIBaseForTest.
-var airtableAPIBase = "https://api.airtable.com"
-
 // SetAirtableAPIBaseForTest overrides the Airtable API base URL. Call only
 // from tests. Pass "" to reset to the real API.
-func SetAirtableAPIBaseForTest(base string) {
-	if base == "" {
-		airtableAPIBase = "https://api.airtable.com"
-	} else {
-		airtableAPIBase = base
-	}
-}
+func SetAirtableAPIBaseForTest(base string) { setAPIBaseForTest("airtable", base) }
 
 func sendAirtable(ctx context.Context, node models.WorkflowNode, rc RunContexter) (any, error) {
 	// OAuth-linked token takes priority: Airtable's OAuth access token works
@@ -89,24 +71,15 @@ func sendAirtable(ctx context.Context, node models.WorkflowNode, rc RunContexter
 		return "airtable_skipped_missing_config", ErrActionSkipped
 	}
 	fieldName := configVal(node, "airtableFieldName", "Notes")
-	target := airtableAPIBase + "/v0/" + url.PathEscape(baseID) + "/" + url.PathEscape(table)
+	target := apiBase("airtable") + "/v0/" + url.PathEscape(baseID) + "/" + url.PathEscape(table)
 	payload := map[string]any{"fields": map[string]any{fieldName: resolveMessage(node, rc)}}
 	headers := map[string]string{"Authorization": "Bearer " + apiKey}
 	return postJSON(ctx, target, headers, payload, "airtable_record_created", "Airtable")
 }
 
-// trelloAPIBase is overridden in tests via SetTrelloAPIBaseForTest.
-var trelloAPIBase = "https://api.trello.com"
-
 // SetTrelloAPIBaseForTest overrides the Trello API base URL. Call only
 // from tests. Pass "" to reset to the real API.
-func SetTrelloAPIBaseForTest(base string) {
-	if base == "" {
-		trelloAPIBase = "https://api.trello.com"
-	} else {
-		trelloAPIBase = base
-	}
-}
+func SetTrelloAPIBaseForTest(base string) { setAPIBaseForTest("trello", base) }
 
 func sendTrello(ctx context.Context, node models.WorkflowNode, rc RunContexter) (any, error) {
 	apiKey := secretVal(node, "trelloAPIKey")
@@ -124,7 +97,7 @@ func sendTrello(ctx context.Context, node models.WorkflowNode, rc RunContexter) 
 	q := url.Values{}
 	q.Set("key", apiKey)
 	q.Set("token", token)
-	target := trelloAPIBase + "/1/cards?" + q.Encode()
+	target := apiBase("trello") + "/1/cards?" + q.Encode()
 	msg := resolveMessage(node, rc)
 	payload := map[string]any{
 		"idList": listID,
@@ -134,18 +107,9 @@ func sendTrello(ctx context.Context, node models.WorkflowNode, rc RunContexter) 
 	return postJSON(ctx, target, nil, payload, "trello_card_created", "Trello")
 }
 
-// asanaAPIBase is overridden in tests via SetAsanaAPIBaseForTest.
-var asanaAPIBase = "https://app.asana.com"
-
 // SetAsanaAPIBaseForTest overrides the Asana API base URL. Call only
 // from tests. Pass "" to reset to the real API.
-func SetAsanaAPIBaseForTest(base string) {
-	if base == "" {
-		asanaAPIBase = "https://app.asana.com"
-	} else {
-		asanaAPIBase = base
-	}
-}
+func SetAsanaAPIBaseForTest(base string) { setAPIBaseForTest("asana", base) }
 
 func sendAsana(ctx context.Context, node models.WorkflowNode, rc RunContexter) (any, error) {
 	// OAuth-linked token takes priority: Asana's OAuth access token works
@@ -170,21 +134,12 @@ func sendAsana(ctx context.Context, node models.WorkflowNode, rc RunContexter) (
 		},
 	}
 	headers := map[string]string{"Authorization": "Bearer " + apiKey}
-	return postJSON(ctx, asanaAPIBase+"/api/1.0/tasks", headers, payload, "asana_task_created", "Asana")
+	return postJSON(ctx, apiBase("asana")+"/api/1.0/tasks", headers, payload, "asana_task_created", "Asana")
 }
-
-// clickupAPIBase is overridden in tests via SetClickUpAPIBaseForTest.
-var clickupAPIBase = "https://api.clickup.com"
 
 // SetClickUpAPIBaseForTest overrides the ClickUp API base URL. Call only
 // from tests. Pass "" to reset to the real API.
-func SetClickUpAPIBaseForTest(base string) {
-	if base == "" {
-		clickupAPIBase = "https://api.clickup.com"
-	} else {
-		clickupAPIBase = base
-	}
-}
+func SetClickUpAPIBaseForTest(base string) { setAPIBaseForTest("clickup", base) }
 
 func sendClickUp(ctx context.Context, node models.WorkflowNode, rc RunContexter) (any, error) {
 	// Unlike Notion/Airtable/Asana above, ClickUp's manual personal-token and
@@ -202,7 +157,7 @@ func sendClickUp(ctx context.Context, node models.WorkflowNode, rc RunContexter)
 	if listID == "" {
 		return "clickup_skipped_no_list_id", ErrActionSkipped
 	}
-	target := clickupAPIBase + "/api/v2/list/" + url.PathEscape(listID) + "/task"
+	target := apiBase("clickup") + "/api/v2/list/" + url.PathEscape(listID) + "/task"
 	msg := resolveMessage(node, rc)
 	payload := map[string]any{"name": issueTitle(msg), "description": msg}
 	var headers map[string]string
@@ -214,18 +169,9 @@ func sendClickUp(ctx context.Context, node models.WorkflowNode, rc RunContexter)
 	return postJSON(ctx, target, headers, payload, "clickup_task_created", "ClickUp")
 }
 
-// todoistAPIBase is overridden in tests via SetTodoistAPIBaseForTest.
-var todoistAPIBase = "https://api.todoist.com"
-
 // SetTodoistAPIBaseForTest overrides the Todoist API base URL. Call only
 // from tests. Pass "" to reset to the real API.
-func SetTodoistAPIBaseForTest(base string) {
-	if base == "" {
-		todoistAPIBase = "https://api.todoist.com"
-	} else {
-		todoistAPIBase = base
-	}
-}
+func SetTodoistAPIBaseForTest(base string) { setAPIBaseForTest("todoist", base) }
 
 func sendTodoist(ctx context.Context, node models.WorkflowNode, rc RunContexter) (any, error) {
 	// OAuth-linked token takes priority: Todoist's OAuth access token works
@@ -243,5 +189,5 @@ func sendTodoist(ctx context.Context, node models.WorkflowNode, rc RunContexter)
 		payload["project_id"] = projectID
 	}
 	headers := map[string]string{"Authorization": "Bearer " + apiKey}
-	return postJSON(ctx, todoistAPIBase+"/rest/v2/tasks", headers, payload, "todoist_task_created", "Todoist")
+	return postJSON(ctx, apiBase("todoist")+"/rest/v2/tasks", headers, payload, "todoist_task_created", "Todoist")
 }

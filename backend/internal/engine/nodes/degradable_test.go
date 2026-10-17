@@ -38,7 +38,10 @@ func TestIsDegradable(t *testing.T) {
 		{"slack send", models.WorkflowNode{Type: models.NodeTypeAction, Template: "slack"}, false},
 		{"postgres write", models.WorkflowNode{Type: models.NodeTypeAction, Template: "db"}, false},
 		{"graphql can mutate", models.WorkflowNode{Type: models.NodeTypeAction, Template: "graphql"}, false},
-		{"gmail_list", models.WorkflowNode{Type: models.NodeTypeGoogle, Template: "gmail_list"}, true},
+		{"sheets_read", models.WorkflowNode{Type: models.NodeTypeGoogle, Template: "sheets_read"}, true},
+		// Removed with its restricted scope: no longer in the catalog, so it
+		// fails closed like any unknown template.
+		{"gmail_list (removed)", models.WorkflowNode{Type: models.NodeTypeGoogle, Template: "gmail_list"}, false},
 		{"gmail_send", models.WorkflowNode{Type: models.NodeTypeGoogle, Template: "gmail_send"}, false},
 		// This workflow's own saved value, not a live source: a miss is a
 		// wrong key, which no retry and no later run will fix.

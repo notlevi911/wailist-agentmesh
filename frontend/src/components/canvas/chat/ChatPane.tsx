@@ -163,7 +163,7 @@ export function ChatPane({
                   independent run, exactly as n8n's chat trigger behaves
                   without a memory node. Better to say so than to imply a
                   continuity the engine does not have. */}
-              each message runs the workflow fresh — agents don&apos;t remember
+              each message runs the workflow fresh: agents don&apos;t remember
               previous messages yet
             </span>
           </div>

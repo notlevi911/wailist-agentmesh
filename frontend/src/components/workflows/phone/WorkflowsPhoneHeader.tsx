@@ -49,7 +49,7 @@ export function WorkflowsPhoneHeader({
     : spendKnown
       ? `${spokenCount}, ${spent} spent in the last 30 days`
       : `${spokenCount}, spend not loaded`;
-  const balance = balanceKnown ? usd.format(balanceUSD) : "—";
+  const balance = balanceKnown ? usd.format(balanceUSD) : "-";
   return (
     <header className="wfp-head">
       <div className="wfp-head__top">
@@ -57,8 +57,8 @@ export function WorkflowsPhoneHeader({
       </div>
       <div className="wfp-head__facts">
         <span className="wfp-head__summary" aria-label={summary}>
-          {known ? count : "—"} <span aria-hidden>·</span>{" "}
-          {known && spendKnown ? spent : "—"} spent
+          {known ? count : "-"} <span aria-hidden>·</span>{" "}
+          {known && spendKnown ? spent : "-"} spent
         </span>
         {/* Two dollar figures on one line: this one says which it is. It is
             also the way to top up: the balance is what adding credits

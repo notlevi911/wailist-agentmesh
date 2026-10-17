@@ -15,6 +15,7 @@ import (
 	"github.com/agentmesh/backend/internal/api/handlers"
 	"github.com/agentmesh/backend/internal/db"
 	"github.com/agentmesh/backend/internal/models"
+	"github.com/agentmesh/backend/internal/testutil"
 	"github.com/agentmesh/backend/internal/wallet"
 )
 
@@ -31,6 +32,7 @@ func testDeps(t *testing.T) *handlers.Deps {
 		t.Fatal(err)
 	}
 	t.Cleanup(store.Close)
+	testutil.EnsureUsers(t, "dev", "owner", "owner-user")
 	return &handlers.Deps{Store: store, EncryptionKey: testEncryptionKey}
 }
 

@@ -2,6 +2,7 @@
 import { useEffect, useState } from "react";
 import { IconArrow, IconWallet } from "@/components/ui";
 import { Topbar } from "@/components/Topbar";
+import { BalanceLoadNotice } from "@/components/billing/BalanceLoadNotice";
 import { PurchaseHistory } from "@/components/billing/PurchaseHistory";
 import { CheckoutModal } from "@/components/checkout/CheckoutModal";
 import { useCredits } from "@/lib/credits/store";
@@ -15,7 +16,6 @@ import { IS_NATIVE } from "@/lib/nativeAuth";
 import { openExternal, WEB_BILLING_URL } from "@/lib/openExternal";
 
 const PRESETS_INR = [1000, 5000, 10000, 20000];
-const LOW_BALANCE_USD = 5;
 
 const HOW_IT_WORKS = [
   "Credits are spent as your agents call paid tools, x402 endpoints, and LLM providers.",
@@ -66,7 +66,10 @@ const viewportStyle: React.CSSProperties = {
 export default function BillingPage() {
   const {
     balanceUSD,
+    lowBalanceThresholdUSD,
     balanceKnown,
+    balanceLoading,
+    balanceFailed,
     lastPurchase,
     refreshBalance,
     refreshPurchases,
@@ -210,7 +213,7 @@ export default function BillingPage() {
       await refreshBalance();
       setCouponState("success");
       setCouponMessage(
-        `Coupon applied — ${fmtUSD(creditedUSD)} added to your balance.`,
+        `Coupon applied: ${fmtUSD(creditedUSD)} added to your balance.`,
       );
       setCouponCode("");
     } catch (e) {
@@ -235,7 +238,7 @@ export default function BillingPage() {
   // Only call a balance "low" once we've actually read it — before the first
   // fetch lands, balanceUSD is 0 because nothing is known, not because the
   // account is empty.
-  const isLow = balanceKnown && balanceUSD < LOW_BALANCE_USD;
+  const isLow = balanceKnown && !balanceFailed && balanceUSD < lowBalanceThresholdUSD;
 
   // A phone gets its own screen rather than the two-column page squeezed:
   // the balance leads, topping up is directly under it, and the rest is flat
@@ -255,6 +258,9 @@ export default function BillingPage() {
             purchasesKnown={purchasesKnown}
             purchasesFailed={purchasesFailed}
             balanceKnown={balanceKnown}
+            balanceLoading={balanceLoading}
+            balanceFailed={balanceFailed}
+            onRetryBalance={refreshBalance}
             isLow={isLow}
             returnState={returnState}
             presets={PRESETS_INR}
@@ -436,7 +442,7 @@ export default function BillingPage() {
                         fontVariantNumeric: "tabular-nums",
                       }}
                     >
-                      {balanceKnown ? fmtUSD(balanceUSD) : "—"}
+                      {balanceKnown ? fmtUSD(balanceUSD) : "-"}
                     </div>
                   </div>
                   <span
@@ -464,13 +470,16 @@ export default function BillingPage() {
                         background: isLow ? "var(--warm)" : "var(--accent)",
                       }}
                     />
-                    {!balanceKnown
-                      ? "Checking…"
-                      : isLow
-                        ? "Low balance"
-                        : "Active"}
+                    {balanceLoading
+                      ? (balanceKnown ? "Refreshing…" : "Checking…")
+                      : balanceFailed
+                        ? "Unavailable"
+                        : !balanceKnown
+                          ? "Checking…"
+                          : isLow ? "Low balance" : "Active"}
                   </span>
                 </div>
+                <BalanceLoadNotice known={balanceKnown} failed={balanceFailed} loading={balanceLoading} onRetry={refreshBalance} />
               </div>
 
               {/* Top-up panel */}
@@ -548,7 +557,7 @@ export default function BillingPage() {
                         >
                           {usdPerINR > 0
                             ? `≈ ${fmtUSD(creditsForTopup(inr, usdPerINR))}`
-                            : "≈ —"}
+                            : "≈ -"}
                         </span>
                       </button>
                     );
@@ -626,7 +635,7 @@ export default function BillingPage() {
                           whiteSpace: "nowrap",
                         }}
                       >
-                        {credits === null ? "≈ —" : `≈ ${fmtUSD(credits)}`}
+                        {credits === null ? "≈ -" : `≈ ${fmtUSD(credits)}`}
                         <span className="bill-custom-unit"> credits</span>
                       </span>
                     )}

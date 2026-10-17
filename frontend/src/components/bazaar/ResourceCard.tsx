@@ -144,7 +144,7 @@ export function ResourceCard({
           ready to run. */}
       {!resource.supported && (
         <div style={{ fontSize: "var(--t-1)", color: "var(--fg-dim)", lineHeight: 1.5 }}>
-          Community listing — you&apos;ll configure its fields yourself after
+          Community listing: you&apos;ll configure its fields yourself after
           adding.
         </div>
       )}
@@ -156,7 +156,7 @@ export function ResourceCard({
           a future partner that has neither params nor a console. */}
       {resource.supported && paramCount === 0 && (
         <div style={{ fontSize: "var(--t-1)", color: "var(--fg-dim)", lineHeight: 1.5 }}>
-          Officially supported — this endpoint takes no input, or its fields
+          Officially supported: this endpoint takes no input, or its fields
           aren&apos;t set up yet. Configure via Discover after adding.
         </div>
       )}

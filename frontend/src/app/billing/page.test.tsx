@@ -9,6 +9,9 @@ import {
 
 const state = vi.hoisted(() => ({
   native: false,
+  balanceKnown: true,
+  balanceLoading: false,
+  balanceFailed: false,
   readOnly: false,
   openExternal: vi.fn<
     (url: string, options?: { onClose?: () => void }) => Promise<void>
@@ -32,7 +35,9 @@ vi.mock("@/hooks/useReadOnly", () => ({
 vi.mock("@/lib/credits/store", () => ({
   useCredits: () => ({
     balanceUSD: 12,
-    balanceKnown: true,
+    balanceKnown: state.balanceKnown,
+    balanceLoading: state.balanceLoading,
+    balanceFailed: state.balanceFailed,
     lastPurchase: undefined,
     refreshBalance: state.refreshBalance,
     refreshPurchases: state.refreshPurchases,
@@ -85,6 +90,9 @@ import { workflows as workflowsApi } from "@/lib/api";
 afterEach(() => {
   cleanup();
   state.native = false;
+  state.balanceKnown = true;
+  state.balanceLoading = false;
+  state.balanceFailed = false;
   state.readOnly = false;
   state.openExternal.mockClear();
   state.refreshBalance.mockClear();
@@ -109,7 +117,7 @@ describe("BillingPage in the Android app", () => {
     await act(async () => {});
 
     const spent = screen.getByText("Spent · 30d").nextElementSibling;
-    expect(spent?.textContent).toBe("—");
+    expect(spent?.textContent).toBe("-");
     expect(spent?.textContent).not.toContain("$0");
   });
 
@@ -272,5 +280,35 @@ describe("BillingPage on the web", () => {
 
     expect(screen.getByText("checkout dialog")).toBeTruthy();
     expect(state.openExternal).not.toHaveBeenCalled();
+  });
+});
+
+
+describe("desktop balance recovery", () => {
+  it("offers an independent retry after first failure and disables it while loading", async () => {
+    state.balanceKnown = false; state.balanceFailed = true;
+    const view = render(<BillingPage />); await act(async () => {});
+    expect(screen.getByText("Could not load your balance.")).toBeTruthy();
+    expect(screen.getByText("Unavailable")).toBeTruthy();
+    const historyCalls = state.refreshPurchases.mock.calls.length;
+    const balanceCalls = state.refreshBalance.mock.calls.length;
+    fireEvent.click(screen.getByRole("button", { name: "Retry balance" }));
+    expect(state.refreshBalance).toHaveBeenCalledTimes(balanceCalls + 1);
+    expect(state.refreshPurchases).toHaveBeenCalledTimes(historyCalls);
+    state.balanceLoading = true; view.rerender(<BillingPage />);
+    expect((screen.getByRole("button", { name: "Retry balance" }) as HTMLButtonElement).disabled).toBe(true);
+    expect(screen.getByText("Retrying…")).toBeTruthy();
+    state.balanceLoading = false; state.balanceFailed = false; state.balanceKnown = true; view.rerender(<BillingPage />);
+    expect(screen.queryByRole("button", { name: "Retry balance" })).toBeNull();
+    expect(screen.getByText("Active")).toBeTruthy();
+  });
+
+  it("labels a retained amount as last known after a refresh failure", async () => {
+    state.balanceFailed = true;
+    render(<BillingPage />); await act(async () => {});
+    expect(screen.getByText("$12.00")).toBeTruthy();
+    expect(screen.getByText("Could not refresh your balance. Showing the last known amount.")).toBeTruthy();
+    expect(screen.getByText("Unavailable")).toBeTruthy();
+    expect(screen.queryByText("Active")).toBeNull();
   });
 });

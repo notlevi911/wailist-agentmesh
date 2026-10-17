@@ -93,20 +93,13 @@ func (rc *RunContext) ToolOutputs() map[string]any {
 // /x402/run (nodes/tendril.go). Changing which output it selects changes what
 // real money is spent on. Do not alter the selection rule.
 //
-// KNOWN ISSUE: "most recent" means last call to Set(), and runner.go runs
-// every node in the same topological level concurrently in its own
-// goroutine (see the wg.Add/go func loop in Run) -- so when two sibling
-// nodes in the same level both call Set(), which one's output Message()/
-// LastOutput() returns is decided by goroutine scheduling, not by the
-// workflow graph. A downstream node fed by two parallel upstream branches
-// can see either branch's output on any given run of the identical
-// workflow. Fixing this properly means Message()/LastOutput() resolving
-// the CALLING node's actual flow-edge predecessor rather than "whatever was
-// set last" -- which needs the predecessor's node ID threaded through
-// RunContexter into every one of the connector call sites that read
-// Message()/LastOutput() (20+ across nodes/connectors_*.go), not a change
-// local to this file. Left undone here; only genuinely single-predecessor
-// chains (the common case in practice) are unaffected.
+// "Most recent" here means the last call to Set() anywhere in the run. The
+// runner runs every node of a topology level concurrently, so for a node's
+// own input that rule is a race. Nodes therefore never read this directly
+// during a run or a dry run: each executes against a nodeRunContext
+// (node_context.go), whose Message()/LastOutput() resolve that node's own
+// flow-edge predecessors, and only falls back to this rule when none of
+// them has produced output (#68).
 func (rc *RunContext) Message() string {
 	rc.mu.RLock()
 	defer rc.mu.RUnlock()

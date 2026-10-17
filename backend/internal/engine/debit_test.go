@@ -2006,16 +2006,6 @@ func TestRunFailsAndNeverCallsPublicRelayWhenRunFundingRecordFails(t *testing.T)
 	nodes.SetOpenAIBaseURL(llmSrv.URL)
 	defer nodes.SetOpenAIBaseURL("https://api.openai.com")
 
-	// Pre-insert a row under this SAME inbound_tx_id, attached to an
-	// unrelated run, so the real run's own RecordRunFunding call below
-	// collides with inbound_tx_id's UNIQUE constraint -- simulating "the
-	// on-chain settle genuinely happened (the fake facilitator above really
-	// does report success) but the DB write recording it failed", without
-	// needing a mock store.
-	if _, err := store.RecordRunFunding(ctx, "pre-existing-unrelated-run", inboundTxID, 1); err != nil {
-		t.Fatal(err)
-	}
-
 	email := fmt.Sprintf("run-funding-record-fail-%d@example.com", time.Now().UnixNano())
 	user, err := store.CreateUser(ctx, email, "hash")
 	if err != nil {
@@ -2031,6 +2021,14 @@ func TestRunFailsAndNeverCallsPublicRelayWhenRunFundingRecordFails(t *testing.T)
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { store.DeleteWorkflow(context.Background(), wf.ID) })
+	unrelatedRun, err := store.CreateRun(ctx, wf.ID, "test", []byte("{}"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Force the later funding write to collide with an existing transaction ID.
+	if _, err := store.RecordRunFunding(ctx, unrelatedRun.ID, inboundTxID, 1); err != nil {
+		t.Fatal(err)
+	}
 
 	graph := models.WorkflowGraph{
 		Nodes: []models.WorkflowNode{

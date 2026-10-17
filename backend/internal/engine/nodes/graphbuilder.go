@@ -629,6 +629,14 @@ func identicalNode(graph *models.WorkflowGraph, nodeType, template, name string,
 	return ""
 }
 
+// nodeExistsError is an add_node rejection that names a node already on the
+// graph and tells the model to use update_node on it. Distinct from every
+// other rejection because the "nothing was created" note (graphsteps.go)
+// would contradict it and invite the re-add it just refused.
+type nodeExistsError struct{ msg string }
+
+func (e nodeExistsError) Error() string { return e.msg }
+
 // typesOwningTemplate lists the node types that have a template with this id.
 //
 // Usually zero or one. "http" is deliberately both a tool (an HTTP request)
@@ -737,7 +745,7 @@ func addGraphNodeResolved(graph *models.WorkflowGraph, args map[string]any, reso
 	if nodeType == "trigger" {
 		for _, n := range graph.Nodes {
 			if n.Type == models.NodeTypeTrigger {
-				return "", fmt.Errorf("add_node: the workflow already has a trigger (%s, %s) and runs from exactly one -- to start it a different way, update that node's template with update_node; everything you have already built is still on the graph", n.ID, n.Template)
+				return "", nodeExistsError{fmt.Sprintf("add_node: the workflow already has a trigger (%s, %s) and runs from exactly one -- to start it a different way, update that node's template with update_node; everything you have already built is still on the graph", n.ID, n.Template)}
 			}
 		}
 	}
@@ -746,7 +754,7 @@ func addGraphNodeResolved(graph *models.WorkflowGraph, args map[string]any, reso
 		return "", fmt.Errorf("add_node: a tool402 node needs the endpoint it calls, and this one has none. Use add_x402_node with an id from search_x402, which fills in the endpoint, price and inputs for you -- add_node type=tool402 is only for an endpoint URL the user handed you themselves, and then \"endpoint\" is required")
 	}
 	if dup := identicalNode(graph, nodeType, template, argString(args, "name"), fields, cfg); dup != "" {
-		return "", fmt.Errorf("add_node: node %s is already exactly this %s/%s -- you have added it once; use update_node on %s if it needs changing, and check the graph you have before adding more", dup, nodeType, template, dup)
+		return "", nodeExistsError{fmt.Sprintf("add_node: node %s is already exactly this %s/%s -- you have added it once; use update_node on %s if it needs changing, and check the graph you have before adding more", dup, nodeType, template, dup)}
 	}
 	id := newGraphID("n_")
 	node := models.WorkflowNode{
@@ -918,6 +926,12 @@ func updateGraphNodeResolved(graph *models.WorkflowGraph, args map[string]any, r
 		// After every field is in place: a template or method change may
 		// have turned this node from a read into a write, or back.
 		applyReadRetryDefault(n)
+		// The catalog no longer lists, per template, which credentials the
+		// user supplies -- so a node that gets its template here is the one
+		// place the model would otherwise never be told.
+		if newTemplate != "" {
+			return fmt.Sprintf("updated node %s%s", id, rules.userSupplied()), nil
+		}
 		return fmt.Sprintf("updated node %s", id), nil
 	}
 	return "", fmt.Errorf("update_node: node %q not found", id)
@@ -1289,9 +1303,6 @@ const maxBuildIterations = 25
 // 60-90s. It is 300s on all plans now, so the old ceiling was stale.
 const defaultBuildTimeBudget = 240 * time.Second
 
-// maxTransportFailures bounds retries for a call that never arrived.
-const maxTransportFailures = 2
-
 // maxEmptyResponses bounds retries for a response with neither text nor a
 // function call.
 const maxEmptyResponses = 2
@@ -1411,18 +1422,22 @@ func catalogPromptSection() string {
 			if f := tpl.keysWithExamples("field"); len(f) > 0 {
 				fmt.Fprintf(&b, "; fields: %s", strings.Join(f, ", "))
 			}
-			if c := tpl.keysWithExamples("config"); len(c) > 0 {
+			// Plain keys, no "(e.g. ...)" hints: 99 config keys carry most of
+			// that text, and describe_node has the full detail for the two or
+			// three templates a build actually uses. The field keys below
+			// keep theirs -- jsonPath and friends are the ones a build gets
+			// wrong in a way a placeholder prevents.
+			if c := tpl.keysWhereAnnotated("config", exampleConfigKeys); len(c) > 0 {
 				fmt.Fprintf(&b, "; config: %s", strings.Join(c, ", "))
 			}
-			user := userSuppliedKeys(t.Type, tpl)
+			// Deliberately not listed here: which credentials the user has to
+			// supply, and where they get them. Every add_node result already
+			// names them for the node just added (nodeRules.userSupplied), and
+			// a rejected attempt to set one repeats it (credentialError). In
+			// this section it was 5.6KB of the prompt resent on every round,
+			// for 86 templates of which a build uses two or three.
 			if tpl.OAuthProvider != "" {
-				user = append(user, "or connect "+tpl.OAuthProvider)
-			}
-			if len(user) > 0 {
-				fmt.Fprintf(&b, "; user supplies: %s", strings.Join(user, ", "))
-				if tpl.AuthDocURL != "" {
-					fmt.Fprintf(&b, " (from %s)", tpl.AuthDocURL)
-				}
+				fmt.Fprintf(&b, "; the user connects %s in the Inspector", tpl.OAuthProvider)
 			}
 			if tpl.Note != "" {
 				fmt.Fprintf(&b, "; NOTE: %s", tpl.Note)
@@ -1442,7 +1457,8 @@ together, then all add_edge calls together (edges need the node ids add_node ret
 Use ONLY the node types, templates and settings in the NODE CATALOG below. It is generated from the canvas
 and the engine, so anything not in it does not exist and will be rejected. For each template it lists the
 keys you may set: "fields" (top-level, via add_node fields) and "config" (node settings, via add_node
-config); "description" is always settable. Keys under "user supplies" are credentials or linked accounts:
+config); "description" is always settable. Credentials and linked accounts are named in the result of the
+add_node (or update_node) call that sets a node's template, and by describe_node:
 you cannot set them, so name the ones this workflow needs on the node's description and in your reply,
 together with where the user gets them. Read every NOTE -- it describes what the node really does, which
 can differ from its name. Presets (a state node's operation, a provider's default model) are applied for
@@ -1480,9 +1496,12 @@ need headers, so say in your reply that its step should be checked with a manual
 Schedules: there is no schedule or cron trigger. For anything that should run on a timetable ("every morning
 at 9", "each Monday"), build it from a manual trigger and call set_schedule with the time the user said, in
 their own words: the server knows their timezone and converts it. Never convert a time to UTC yourself.
-set_schedule covers daily, weekly and monthly. For anything else (hourly, weekdays only, several times a day)
-tell the user to set it from the Schedule option on the Workflows page. A schedule only fires once the
+set_schedule supports a daily time, one weekday, or one monthly date. For multiple weekdays at the same
+time, direct the user to the Schedule option on the Workflows page, where they can select those days.
+Hourly and several times a day are not supported by these editors. Explain this limit and ask the user
+to choose a supported cadence before changing an existing schedule. A schedule only fires once the
 workflow is deployed, so say that in your reply. Never claim a schedule is set unless set_schedule said so.
+Describe a schedule in plain words ("every Monday at 9:00 AM"), never as a cron expression.
 
 x402 endpoints (node type tool402): real pay-per-call services from the x402 Bazaar. Every call costs the user
 the endpoint's price PLUS a 1.50 USD AgentMesh fee -- usually far more than the endpoint itself -- and an agent
@@ -1564,13 +1583,66 @@ without one cannot run. Make small, sensible workflows unless asked for somethin
 done making changes, reply with a short plain-text summary of what you built or changed -- do not call any more
 tools once you're done.`
 
-// unfinishedReply is what a build that stopped early says -- never "",
-// which reaches the user as a blank chat bubble.
-func unfinishedReply(lastReply string) string {
+// unfinishedReply is what a build that stopped early says, never "", which
+// reaches the user as a blank chat bubble. A held reply was written before the
+// round that was meant to check or repair the graph, and that round did not
+// happen, so it is returned with a note instead of passing as a finished build.
+func unfinishedReply(lastReply, why string) string {
 	if strings.TrimSpace(lastReply) != "" {
-		return lastReply
+		return lastReply + "\n\n_I could not finish checking this one (" + why + "), so it may still need a fix._"
 	}
-	return "I didn't get to finish this one. What I built so far is on the canvas — tell me what to finish and I'll carry on from there."
+	return "I didn't get to finish this one (" + why + "). What I built so far is on the canvas, tell me what to finish and I'll carry on from there."
+}
+
+var modelAPIStatus = regexp.MustCompile(`LLM API (\d{3})`)
+
+func isTransientModelError(err error) bool {
+	if err == nil || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return false
+	}
+	m := modelAPIStatus.FindStringSubmatch(err.Error())
+	return m == nil || m[1] == "429" || strings.HasPrefix(m[1], "5")
+}
+
+const modelRetryDelay = time.Second
+
+// Leave enough budget for useful work after waiting; permanent refusals cannot
+// improve when the same request is sent again.
+func callBuildModel(ctx context.Context, apiURL string, headers map[string]string, payload any, timeLeft func() time.Duration) (map[string]any, error) {
+	resp, err := postLLMJSON(ctx, apiURL, headers, payload)
+	if !isTransientModelError(err) || ctx.Err() != nil || timeLeft() < modelRetryDelay*3 {
+		return resp, err
+	}
+	timer := time.NewTimer(modelRetryDelay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case <-timer.C:
+		return postLLMJSON(ctx, apiURL, headers, payload)
+	}
+}
+
+// modelFailureReason says what kind of failure stopped a build, never the
+// upstream body. The status comes from postLLMJSON's error, the only shape
+// that carries one; anything without it is a transport failure.
+func modelFailureReason(err error) string {
+	if errors.Is(err, ErrNoModelText) {
+		return "the model stopped without an answer"
+	}
+	m := modelAPIStatus.FindStringSubmatch(err.Error())
+	if m == nil {
+		return "the model service could not be reached"
+	}
+	switch status := m[1]; {
+	case status == "429":
+		return "the model service is busy right now (rate limit)"
+	case status == "401" || status == "403":
+		return "the model service refused this platform's credentials"
+	case strings.HasPrefix(status, "5"):
+		return "the model service is having trouble"
+	}
+	return "the model service rejected the request"
 }
 
 // repairMessage asks for another pass over what the audit found. The graph
@@ -1661,6 +1733,50 @@ func cloneGraph(g models.WorkflowGraph) models.WorkflowGraph {
 		n.CustomParams = slices.Clone(n.CustomParams)
 	}
 	return out
+}
+
+// heavyResultTools are the tools whose result is big -- a test run's whole
+// JSON, up to 3000 bytes of a fetched page, a web search's answer -- mapped
+// to how many of the newest are worth keeping. Every round resends the whole
+// conversation, so a superseded result is paid for again on every later round
+// and competes for the model's attention with the graph it is building.
+var heavyResultTools = map[string]int{
+	"test_run": 1, "fetch_url": 2, "web_search": 2, "describe_node": 2,
+}
+
+// pruneHeavyResults replaces all but the newest few results of each heavy
+// tool with one line saying it was left out. The last protect turns are left
+// untouched -- the model has not read them yet -- but still count towards how
+// many of each tool's results are kept. The turn structure is untouched
+// -- every functionCall keeps its matching functionResponse, which Gemini
+// requires -- only the payload inside the superseded ones is dropped.
+func pruneHeavyResults(contents []map[string]any, protect int) {
+	seen := map[string]int{}
+	for i := len(contents) - 1; i >= 0; i-- {
+		protected := i >= len(contents)-protect
+		parts, _ := contents[i]["parts"].([]map[string]any)
+		for _, p := range parts {
+			fr, ok := p["functionResponse"].(map[string]any)
+			if !ok {
+				continue
+			}
+			name, _ := fr["name"].(string)
+			keep, heavy := heavyResultTools[name]
+			if !heavy {
+				continue
+			}
+			// Counted even when protected: a result the model has not read
+			// yet is still the newest one, and that is what makes the result
+			// before it stale.
+			seen[name]++
+			if protected || seen[name] <= keep {
+				continue
+			}
+			fr["response"] = map[string]any{
+				"result": "(an earlier " + name + " result, left out to keep this conversation short -- run it again if you still need it)",
+			}
+		}
+	}
 }
 
 // BuildGraph runs a bounded tool-calling loop against the Gemini Flash
@@ -1798,7 +1914,6 @@ func BuildGraph(ctx context.Context, req BuildRequest) (result BuildGraphResult,
 	baselineFindings := auditGraph(graph)
 	auditRetried := false
 	emptyResponses := 0
-	transportFailures := 0
 	// What this build spent. Gemini reports it on every response and it was
 	// decoded and thrown away, so nothing could say what a build cost or
 	// whether the stable prefix (instructions plus tool declarations) was
@@ -1819,22 +1934,18 @@ func BuildGraph(ctx context.Context, req BuildRequest) (result BuildGraphResult,
 		} else {
 			progress.working("Planning the next step")
 		}
-		resp, err := postLLMJSON(ctx, apiURL, apiHeaders, payload)
+		resp, err := callBuildModel(ctx, apiURL, apiHeaders, payload, func() time.Duration {
+			return budget - time.Since(started)
+		})
 		if err != nil {
 			if errors.Is(ctx.Err(), context.DeadlineExceeded) {
 				return ranOutOfTime(), nil
 			}
-			// An error here means BuildWorkflow never reaches its save and
-			// every node built goes with it. Try again, then keep them.
-			if transportFailures < maxTransportFailures {
-				transportFailures++
-				if req.TraceID != "" {
-					log.Printf("build %s: model call failed (%d): %v", req.TraceID, transportFailures, err)
-				}
-				continue
+			if req.TraceID != "" {
+				log.Printf("build %s: model call failed (%s): %v", req.TraceID, modelFailureReason(err), err)
 			}
 			if changedSomething() {
-				return BuildGraphResult{Reply: withTestStatus(unfinishedReply(lastReply)), Graph: graph}, nil
+				return BuildGraphResult{Reply: withTestStatus(unfinishedReply(lastReply, modelFailureReason(err))), Graph: graph}, nil
 			}
 			return BuildGraphResult{}, err
 		}
@@ -1871,12 +1982,12 @@ func BuildGraph(ctx context.Context, req BuildRequest) (result BuildGraphResult,
 				if emptyResponses < maxEmptyResponses {
 					emptyResponses++
 					if req.TraceID != "" {
-						log.Printf("build %s: empty model response, retrying (%d)", req.TraceID, emptyResponses)
+						log.Printf("build %s: empty model response, retrying (%d): %v", req.TraceID, emptyResponses, err)
 					}
 					continue
 				}
 				if changedSomething() {
-					return BuildGraphResult{Reply: withTestStatus(unfinishedReply(lastReply)), Graph: graph}, nil
+					return BuildGraphResult{Reply: withTestStatus(unfinishedReply(lastReply, modelFailureReason(err))), Graph: graph}, nil
 				}
 				return BuildGraphResult{}, err
 			}
@@ -1996,6 +2107,12 @@ func BuildGraph(ctx context.Context, req BuildRequest) (result BuildGraphResult,
 			})
 		}
 		contents = append(contents, map[string]any{"role": "user", "parts": responseParts})
+		// The turn just appended is protected: those results are what the
+		// model is about to read for the first time, and the prompt asks it
+		// to batch its research into one turn, so pruning there would take
+		// away answers it has never seen. It still counts as the newest,
+		// which is what makes the one before it stale.
+		pruneHeavyResults(contents, 1)
 		payload["contents"] = contents
 	}
 

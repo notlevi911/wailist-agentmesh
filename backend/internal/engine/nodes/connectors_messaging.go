@@ -11,19 +11,10 @@ import (
 	"github.com/agentmesh/backend/internal/models"
 )
 
-// slackAPIBase is overridden in tests via SetSlackAPIBaseForTest so requests
-// hit an httptest server instead of the real Slack API.
-var slackAPIBase = "https://slack.com"
-
-// SetSlackAPIBaseForTest overrides the Slack API base URL. Call only from
-// tests. Pass "" to reset to the real API.
-func SetSlackAPIBaseForTest(base string) {
-	if base == "" {
-		slackAPIBase = "https://slack.com"
-	} else {
-		slackAPIBase = base
-	}
-}
+// SetSlackAPIBaseForTest overrides the Slack API base URL, so requests hit an
+// httptest server instead of the real Slack API. Call only from tests. Pass
+// "" to reset to the real API.
+func SetSlackAPIBaseForTest(base string) { setAPIBaseForTest("slack", base) }
 
 func sendSlack(ctx context.Context, node models.WorkflowNode, rc RunContexter) (any, error) {
 	if botToken := secretVal(node, "slackOAuthAccessToken"); botToken != "" {
@@ -38,7 +29,7 @@ func sendSlack(ctx context.Context, node models.WorkflowNode, rc RunContexter) (
 		// a top-level "ok"/"error" field instead of the status code —
 		// postJSON/doAndCheck only inspects the status code, so this can't
 		// route through them the way the webhook-URL connectors do.
-		req, err := newJSONRequest(ctx, http.MethodPost, slackAPIBase+"/api/chat.postMessage", headers, payload)
+		req, err := newJSONRequest(ctx, http.MethodPost, apiBase("slack")+"/api/chat.postMessage", headers, payload)
 		if err != nil {
 			return nil, fmt.Errorf("Slack: %w", err)
 		}
@@ -123,19 +114,10 @@ func sendNtfy(ctx context.Context, node models.WorkflowNode, rc RunContexter) (a
 	return doAndCheck(req, "ntfy_sent", "ntfy")
 }
 
-// telegramAPIBase is overridden in tests via SetTelegramAPIBaseForTest so requests
-// hit an httptest server instead of the real Telegram Bot API.
-var telegramAPIBase = "https://api.telegram.org"
-
-// SetTelegramAPIBaseForTest overrides the Telegram API base URL. Call only from
+// SetTelegramAPIBaseForTest overrides the Telegram API base URL, so requests
+// hit an httptest server instead of the real Telegram Bot API. Call only from
 // tests. Pass "" to reset to the real API.
-func SetTelegramAPIBaseForTest(base string) {
-	if base == "" {
-		telegramAPIBase = "https://api.telegram.org"
-	} else {
-		telegramAPIBase = base
-	}
-}
+func SetTelegramAPIBaseForTest(base string) { setAPIBaseForTest("telegram", base) }
 
 func sendTelegram(ctx context.Context, node models.WorkflowNode, rc RunContexter) (any, error) {
 	// TrimSpace guards against a stray newline or trailing space surviving
@@ -151,7 +133,7 @@ func sendTelegram(ctx context.Context, node models.WorkflowNode, rc RunContexter
 	if chatID == "" {
 		return "telegram_skipped_no_chat_id", ErrActionSkipped
 	}
-	target := telegramAPIBase + "/bot" + token + "/sendMessage"
+	target := apiBase("telegram") + "/bot" + token + "/sendMessage"
 	payload := map[string]any{"chat_id": chatID, "text": resolveMessage(node, rc)}
 	return postJSON(ctx, target, nil, payload, "telegram_sent", "Telegram")
 }
@@ -172,7 +154,7 @@ func getTelegramUpdates(ctx context.Context, node models.WorkflowNode, rc RunCon
 	if limit := configVal(node, "telegramLimit", ""); limit != "" {
 		q.Set("limit", limit)
 	}
-	target := telegramAPIBase + "/bot" + token + "/getUpdates"
+	target := apiBase("telegram") + "/bot" + token + "/getUpdates"
 	if len(q) > 0 {
 		target += "?" + q.Encode()
 	}

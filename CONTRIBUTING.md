@@ -75,7 +75,7 @@ agentmesh/
 │       │   ├── handlers/   One file per resource (auth, oauth, connector_oauth,
 │       │   │               oauth2creds, workflows, runs, deploy, tools, bazaar,
 │       │   │               payments, usage, secrets, leases, tendril_console,
-│       │   │               x402relay, waitlist)
+│       │   │               x402relay)
 │       │   └── middleware.go  CORS, JWT auth, SSE token fallback
 │       ├── engine/
 │       │   ├── runner.go   Topological executor — parallel level execution
@@ -204,7 +204,6 @@ SUM(users.tendril_credit_usd_micros) + (hours currently metering) <= Tendril poo
 | `POST` | `/auth/signout` | Clears auth cookie |
 | `GET` | `/auth/oauth/:provider` | Start OAuth (`github` or `google`) |
 | `GET` | `/auth/oauth/:provider/callback` | OAuth callback — sets cookie, redirects to frontend |
-| `POST` | `/waitlist` | Join waitlist — body: `{ email }` |
 | `POST` | `/run/:workflowId` | Public webhook trigger (only works on deployed workflows with a trigger node) |
 
 ### Protected endpoints (require auth cookie or `Authorization: Bearer <token>`)
@@ -315,7 +314,6 @@ Each run has a channel in the in-process SSE broker (`internal/sse`). The runner
 | `tool_credentials` | Encrypted per-provider API keys scoped to a workflow |
 | `runs` | `id`, `workflow_id`, `status`, `input`, `output`, `created_at` |
 | `run_logs` | `id`, `run_id`, `node_id`, `level`, `message`, `created_at` |
-| `waitlist` | `id`, `email` (unique), `created_at` |
 
 ---
 

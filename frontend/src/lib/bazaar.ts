@@ -109,7 +109,7 @@ const MOCK_RESOURCES: BazaarResource[] = [
     url: "https://tendrilregister.007575.xyz/x402/run",
     method: "POST",
     description:
-      "Run a Python script on rented compute and get its stdout back. No lease needed — Tendril picks the machine, runs the job in a throwaway sandbox, and destroys it.",
+      "Run a Python script on rented compute and get its stdout back. No lease needed: Tendril picks the machine, runs the job in a throwaway sandbox, and destroys it.",
     merchantId: "",
     network: "algorand-mainnet",
     testnet: false,

@@ -35,7 +35,7 @@ func resolveCoin(ctx context.Context, query string) ([]CoinMatch, error) {
 	}
 	q := url.Values{}
 	q.Set("query", query)
-	raw, err := coinGeckoGet(ctx, coinGeckoAPIBase+"/search?"+q.Encode())
+	raw, err := coinGeckoGet(ctx, apiBase("coingecko")+"/search?"+q.Encode())
 	if err != nil {
 		return nil, fmt.Errorf("resolve_coin: %w", err)
 	}

@@ -75,7 +75,7 @@ export function runBlockedReason({
             : unreachedStep
               ? "A step isn't connected"
               : "Nothing to run yet",
-        detail: "This workflow isn't finished yet — build it in the AgentMesh desktop app",
+        detail: "This workflow isn't finished yet: build it in the AgentMesh desktop app",
         action: null,
       };
     }
@@ -101,7 +101,7 @@ export function runBlockedReason({
       ? {
           code: "not-ready",
           title: "A step isn't connected",
-          detail: `“${unreachedStep}” has nothing flowing into it — connect its input before running`,
+          detail: `“${unreachedStep}” has nothing flowing into it: connect its input before running`,
           action: null,
         }
       : {
@@ -118,7 +118,7 @@ export function runBlockedReason({
     title: "Not deployed",
     detail: canDeploy
       ? "Deploy first to run"
-      : "Not deployed yet — deploy it from the AgentMesh desktop app",
+      : "Not deployed yet: deploy it from the AgentMesh desktop app",
     action: canDeploy ? "deploy" : null,
   };
 }

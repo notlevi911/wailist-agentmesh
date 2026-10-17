@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/agentmesh/backend/internal/db"
+	"github.com/agentmesh/backend/internal/testutil"
 )
 
 func TestConnect(t *testing.T) {
@@ -32,5 +33,6 @@ func testStore(t *testing.T) *db.Store {
 		t.Fatalf("connect: %v", err)
 	}
 	t.Cleanup(store.Close)
+	testutil.EnsureUsers(t, "dev")
 	return store
 }

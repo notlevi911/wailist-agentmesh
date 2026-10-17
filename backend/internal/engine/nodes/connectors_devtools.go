@@ -33,18 +33,9 @@ const dnsLabelPattern = `[a-zA-Z0-9][a-zA-Z0-9-]*`
 // attacker-controlled host.
 var jiraDomainPattern = regexp.MustCompile(`^` + dnsLabelPattern + `$`)
 
-// githubAPIBase is overridden in tests via SetGitHubAPIBaseForTest.
-var githubAPIBase = "https://api.github.com"
-
 // SetGitHubAPIBaseForTest overrides the GitHub API base URL. Call only from
 // tests. Pass "" to reset to the real API.
-func SetGitHubAPIBaseForTest(base string) {
-	if base == "" {
-		githubAPIBase = "https://api.github.com"
-	} else {
-		githubAPIBase = base
-	}
-}
+func SetGitHubAPIBaseForTest(base string) { setAPIBaseForTest("github", base) }
 
 func sendGitHub(ctx context.Context, node models.WorkflowNode, rc RunContexter) (any, error) {
 	// OAuth-linked token takes priority: a classic GitHub OAuth app's access
@@ -64,7 +55,7 @@ func sendGitHub(ctx context.Context, node models.WorkflowNode, rc RunContexter) 
 	if !ok || owner == "" || name == "" {
 		return "github_skipped_invalid_repo", ErrActionSkipped
 	}
-	target := githubAPIBase + "/repos/" + url.PathEscape(owner) + "/" + url.PathEscape(name) + "/issues"
+	target := apiBase("github") + "/repos/" + url.PathEscape(owner) + "/" + url.PathEscape(name) + "/issues"
 	msg := resolveMessage(node, rc)
 	payload := map[string]any{"title": issueTitle(msg), "body": msg}
 	headers := map[string]string{
@@ -74,18 +65,12 @@ func sendGitHub(ctx context.Context, node models.WorkflowNode, rc RunContexter) 
 	return postJSON(ctx, target, headers, payload, "github_issue_created", "GitHub")
 }
 
-// jiraAPIBase is overridden in tests via SetJiraAPIBaseForTest — normally
-// "https://{domain}.atlassian.net" is built per-node, so the test override
-// replaces the whole scheme+host, and sendJira skips the ".atlassian.net"
-// suffix when a test base is set.
-var jiraAPIBase = ""
-
 // SetJiraAPIBaseForTest overrides the Jira API base URL entirely (including
-// scheme+host). Call only from tests. Pass "" to reset to the real
-// https://{domain}.atlassian.net construction.
-func SetJiraAPIBaseForTest(base string) {
-	jiraAPIBase = base
-}
+// scheme+host). Normally "https://{domain}.atlassian.net" is built per-node,
+// so the test override replaces the whole scheme+host, and sendJira skips the
+// ".atlassian.net" suffix when a test base is set. Call only from tests. Pass
+// "" to reset to the real https://{domain}.atlassian.net construction.
+func SetJiraAPIBaseForTest(base string) { setAPIBaseForTest("jira", base) }
 
 func sendJira(ctx context.Context, node models.WorkflowNode, rc RunContexter) (any, error) {
 	// OAuth-linked and manual API-token paths are genuinely different request
@@ -103,7 +88,7 @@ func sendJira(ctx context.Context, node models.WorkflowNode, rc RunContexter) (a
 			return "jira_skipped_missing_config", ErrActionSkipped
 		}
 		issueType := configVal(node, "jiraIssueType", "Task")
-		base := jiraAPIBase
+		base := apiBase("jira")
 		if base == "" {
 			base = "https://api.atlassian.com/ex/jira/" + cloudID
 		}
@@ -142,7 +127,7 @@ func sendJira(ctx context.Context, node models.WorkflowNode, rc RunContexter) (a
 		return "jira_skipped_invalid_domain", ErrActionSkipped
 	}
 	issueType := configVal(node, "jiraIssueType", "Task")
-	base := jiraAPIBase
+	base := apiBase("jira")
 	if base == "" {
 		base = "https://" + domain + ".atlassian.net"
 	}
@@ -167,18 +152,9 @@ func sendJira(ctx context.Context, node models.WorkflowNode, rc RunContexter) (a
 	return postJSON(ctx, target, headers, payload, "jira_issue_created", "Jira")
 }
 
-// linearAPIBase is overridden in tests via SetLinearAPIBaseForTest.
-var linearAPIBase = "https://api.linear.app"
-
 // SetLinearAPIBaseForTest overrides the Linear API base URL. Call only
 // from tests. Pass "" to reset to the real API.
-func SetLinearAPIBaseForTest(base string) {
-	if base == "" {
-		linearAPIBase = "https://api.linear.app"
-	} else {
-		linearAPIBase = base
-	}
-}
+func SetLinearAPIBaseForTest(base string) { setAPIBaseForTest("linear", base) }
 
 func sendLinear(ctx context.Context, node models.WorkflowNode, rc RunContexter) (any, error) {
 	// Unlike Jira, the OAuth and manual paths here hit the same endpoint with
@@ -219,7 +195,7 @@ func sendLinear(ctx context.Context, node models.WorkflowNode, rc RunContexter) 
 	// "errors" array or issueCreate.success:false instead of the status code —
 	// postJSON/doAndCheck only inspects the status code, so this can't route
 	// through them the way the REST connectors do.
-	req, err := newJSONRequest(ctx, http.MethodPost, linearAPIBase+"/graphql", headers, payload)
+	req, err := newJSONRequest(ctx, http.MethodPost, apiBase("linear")+"/graphql", headers, payload)
 	if err != nil {
 		return nil, fmt.Errorf("Linear: %w", err)
 	}
@@ -257,26 +233,19 @@ func sendLinear(ctx context.Context, node models.WorkflowNode, rc RunContexter) 
 	return "linear_issue_created", nil
 }
 
-// gitlabOAuthAPIBase is deliberately a fixed constant-like var, never derived
-// from node.Config's gitlabBaseURL, and overridden only in tests via
-// SetGitLabOAuthAPIBaseForTest. The OAuth app backing gitlabOAuthAccessToken
-// is registered against gitlab.com's own OAuth service, so a token minted
-// through it is only ever valid there — never against a self-hosted instance
-// — regardless of what gitlabBaseURL a node happens to have configured (e.g.
-// left over from, or set alongside, the unrelated manual-token path below).
-// Self-hosted GitLab OAuth-linking is out of scope; self-hosted still only
-// works via the manual PRIVATE-TOKEN path, which does read gitlabBaseURL.
-var gitlabOAuthAPIBase = "https://gitlab.com"
-
 // SetGitLabOAuthAPIBaseForTest overrides the OAuth-path GitLab API base URL.
 // Call only from tests. Pass "" to reset to the real https://gitlab.com.
-func SetGitLabOAuthAPIBaseForTest(base string) {
-	if base == "" {
-		gitlabOAuthAPIBase = "https://gitlab.com"
-	} else {
-		gitlabOAuthAPIBase = base
-	}
-}
+//
+// The OAuth-path base ("gitlab_oauth" in apiBaseDefaults) is deliberately
+// fixed, never derived from node.Config's gitlabBaseURL. The OAuth app backing
+// gitlabOAuthAccessToken is registered against gitlab.com's own OAuth service,
+// so a token minted through it is only ever valid there — never against a
+// self-hosted instance — regardless of what gitlabBaseURL a node happens to
+// have configured (e.g. left over from, or set alongside, the unrelated
+// manual-token path below). Self-hosted GitLab OAuth-linking is out of scope;
+// self-hosted still only works via the manual PRIVATE-TOKEN path, which does
+// read gitlabBaseURL.
+func SetGitLabOAuthAPIBaseForTest(base string) { setAPIBaseForTest("gitlab_oauth", base) }
 
 func sendGitLab(ctx context.Context, node models.WorkflowNode, rc RunContexter) (any, error) {
 	// Credential presence (either token) must be checked before projectID,
@@ -303,7 +272,7 @@ func sendGitLab(ctx context.Context, node models.WorkflowNode, rc RunContexter) 
 	// present rather than trying to unify the two into one header
 	// construction, same shape as sendJira above.
 	if oauthToken != "" {
-		target := gitlabOAuthAPIBase + "/api/v4/projects/" + url.PathEscape(projectID) + "/issues"
+		target := apiBase("gitlab_oauth") + "/api/v4/projects/" + url.PathEscape(projectID) + "/issues"
 		headers := map[string]string{"Authorization": "Bearer " + oauthToken}
 		return postJSON(ctx, target, headers, payload, "gitlab_issue_created", "GitLab")
 	}

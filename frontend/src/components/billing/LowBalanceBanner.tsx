@@ -1,14 +1,13 @@
 "use client";
 import { useCredits } from "@/lib/credits/store";
-import { LOW_BALANCE_THRESHOLD_USD } from "@/lib/credits/fx";
 
 // Low-balance warning: shows once the server-reported balance falls below the
 // threshold. Gated on balanceKnown, not on a render count -- an unfetched
 // balance reads as 0 and would flash this banner at every user on page load.
 export function LowBalanceBanner({ onTopUp }: { onTopUp: () => void }) {
-  const { balanceUSD, balanceKnown } = useCredits();
+  const { balanceUSD, balanceKnown, lowBalanceThresholdUSD } = useCredits();
 
-  if (!balanceKnown || balanceUSD >= LOW_BALANCE_THRESHOLD_USD) return null;
+  if (!balanceKnown || balanceUSD >= lowBalanceThresholdUSD) return null;
 
   return (
     <div

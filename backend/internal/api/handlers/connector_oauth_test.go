@@ -15,6 +15,7 @@ import (
 	"github.com/agentmesh/backend/internal/api/handlers"
 	"github.com/agentmesh/backend/internal/db"
 	"github.com/agentmesh/backend/internal/models"
+	"github.com/agentmesh/backend/internal/testutil"
 )
 
 // testStore returns a *db.Store backed by TEST_DATABASE_URL, skipping the
@@ -41,6 +42,7 @@ func setupConnectorTestFixtures(t *testing.T, store *db.Store) (string, string, 
 	t.Helper()
 	ctx := context.Background()
 	userID := "connector-oauth-test-user"
+	testutil.EnsureUsers(t, userID)
 
 	wf, err := store.CreateWorkflow(ctx, "test", userID)
 	if err != nil {

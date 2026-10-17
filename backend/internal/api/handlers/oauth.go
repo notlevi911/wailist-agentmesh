@@ -34,7 +34,7 @@ func (d *Deps) providerConfig(name string) (oauthProvider, bool) {
 			authURL:      "https://github.com/login/oauth/authorize",
 			tokenURL:     "https://github.com/login/oauth/access_token",
 			userInfoURL:  "https://api.github.com/user",
-			scope:        "read:user user:email",
+			scope:        "user:email",
 			clientID:     d.GithubClientID,
 			clientSecret: d.GithubClientSecret,
 		}, d.GithubClientID != "" && d.GithubClientSecret != ""
@@ -43,7 +43,7 @@ func (d *Deps) providerConfig(name string) (oauthProvider, bool) {
 			authURL:      "https://accounts.google.com/o/oauth2/v2/auth",
 			tokenURL:     "https://oauth2.googleapis.com/token",
 			userInfoURL:  "https://www.googleapis.com/oauth2/v2/userinfo",
-			scope:        "openid email profile",
+			scope:        "openid email",
 			clientID:     d.GoogleClientID,
 			clientSecret: d.GoogleClientSecret,
 		}, d.GoogleClientID != "" && d.GoogleClientSecret != ""

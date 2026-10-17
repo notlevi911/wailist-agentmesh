@@ -63,6 +63,12 @@ export const metadata: Metadata = {
     icon: [{ url: "/logo.png", type: "image/png" }],
     apple: [{ url: "/logo.png" }],
   },
+  // Search Console ownership of https://www.agent-mesh.app/, by the account
+  // that owns the Google Cloud project -- Google's OAuth verification requires
+  // that link. Public by design; removing it un-verifies the property.
+  verification: {
+    google: "9-jSNxDO_dUs9vmhvHwqhurWMQ1Fr6nbVoPrnp_fN10",
+  },
 };
 
 // Next injects this by default, but the app is now explicitly responsive, so the

@@ -1232,15 +1232,6 @@ func (s *Store) GetOrCreateOAuthUser(ctx context.Context, email string) (models.
 	return u, err
 }
 
-// --- Waitlist methods ---
-
-func (s *Store) InsertWaitlistEmail(ctx context.Context, email string) error {
-	_, err := s.pool.Exec(ctx, `
-		INSERT INTO waitlist (email) VALUES ($1) ON CONFLICT (email) DO NOTHING
-	`, email)
-	return err
-}
-
 // --- Credit ledger methods ---
 
 func (s *Store) CreateCreditTransaction(ctx context.Context, userID, providerOrderID string, amountINRPaise int64, fxRate float64) (models.CreditTransaction, error) {
@@ -2384,7 +2375,7 @@ func (s *Store) GetOAuthCredential(ctx context.Context, id string) (models.OAuth
 func (s *Store) ListOAuthCredentials(ctx context.Context, userID, provider string) ([]models.OAuthCredential, error) {
 	rows, err := s.pool.Query(ctx,
 		`SELECT `+oauthCredentialCols+` FROM oauth_credentials
-		 WHERE user_id = $1 AND provider = $2 ORDER BY created_at DESC`, userID, provider)
+		 WHERE user_id = $1 AND ($2 = '' OR provider = $2) ORDER BY created_at DESC`, userID, provider)
 	if err != nil {
 		return nil, err
 	}

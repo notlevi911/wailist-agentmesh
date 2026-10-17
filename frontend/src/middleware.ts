@@ -7,6 +7,7 @@ const PROTECTED = [
   "/bazaar",
   "/activity",
   "/account",
+  "/settings",
 ];
 // agentmesh_ui is a non-sensitive first-party cookie set by useAuth on the
 // frontend domain. The real auth is the HttpOnly agentmesh_token cookie sent
@@ -48,5 +49,7 @@ export const config = {
     "/activity/:path*",
     "/account",
     "/account/:path*",
+    "/settings",
+    "/settings/:path*",
   ],
 };

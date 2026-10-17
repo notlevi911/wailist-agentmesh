@@ -32,18 +32,26 @@ type oauth2CredProvider struct {
 	cfg         oauthcred.ProviderConfig
 }
 
-// googleConnectorScopes covers all four Google products in ONE consent
-// screen rather than four separate connections -- Google allows granting
-// multiple scopes in a single OAuth flow, and asking once is much less
-// friction than making the user reconnect per product. drive.readonly (not
-// the broader "drive" scope) deliberately keeps the review surface smaller:
-// it can list/download but not overwrite/delete arbitrary files.
+// googleConnectorScopes covers the three Google products in ONE consent
+// screen rather than separate connections -- Google allows granting several
+// scopes in a single OAuth flow, and asking once is much less friction than
+// making the user reconnect per product.
+//
+// Only Google "sensitive" scopes, never "restricted" ones: gmail.readonly and
+// drive.readonly were dropped (with the Gmail read and Drive nodes) because a
+// restricted scope cannot pass Google's OAuth verification without a paid
+// annual CASA security assessment. Sensitive scopes verify for free. Adding a
+// restricted scope back here re-opens that requirement.
+//
+// userinfo.email is non-sensitive (no review at all) and is what lets
+// fetchGoogleAccountLabel read the account's address: without it Google's
+// userinfo endpoint returns no email and every connection was stored as
+// "unlabeled-xxxx".
 var googleConnectorScopes = []string{
-	"https://www.googleapis.com/auth/gmail.readonly",
+	"https://www.googleapis.com/auth/userinfo.email",
 	"https://www.googleapis.com/auth/gmail.send",
 	"https://www.googleapis.com/auth/spreadsheets",
 	"https://www.googleapis.com/auth/calendar",
-	"https://www.googleapis.com/auth/drive.readonly",
 }
 
 // googleAuthURL/googleTokenURL/googleUserInfoURL are overridden in tests via
@@ -277,10 +285,6 @@ func randomLabelSuffix() string {
 func (d *Deps) OAuth2CredList(w http.ResponseWriter, r *http.Request) {
 	userID, _ := r.Context().Value(CtxUserID).(string)
 	provider := r.URL.Query().Get("provider")
-	if provider == "" {
-		respond.Error(w, http.StatusBadRequest, "provider query param required")
-		return
-	}
 	creds, err := d.Store.ListOAuthCredentials(r.Context(), userID, provider)
 	if err != nil {
 		respond.Error(w, http.StatusInternalServerError, err.Error())

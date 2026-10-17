@@ -11,6 +11,7 @@ import (
 	"github.com/agentmesh/backend/internal/db"
 	"github.com/agentmesh/backend/internal/models"
 	"github.com/agentmesh/backend/internal/sse"
+	"github.com/agentmesh/backend/internal/testutil"
 )
 
 // newConfigStalenessTestRunner is a package-local twin of engine_test's
@@ -43,7 +44,9 @@ func TestResumeReExecutesPureComputeNodeWhenConfigChanged(t *testing.T) {
 	runner, store := newConfigStalenessTestRunner(t)
 	ctx := context.Background()
 
-	wf, err := store.CreateWorkflow(ctx, "Config Staleness Recompute Test", fmt.Sprintf("user-%d", time.Now().UnixNano()))
+	userID := fmt.Sprintf("user-%d", time.Now().UnixNano())
+	testutil.EnsureUsers(t, userID)
+	wf, err := store.CreateWorkflow(ctx, "Config Staleness Recompute Test", userID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -143,7 +146,9 @@ func TestResumeSkipsSideEffectNodeEvenWhenConfigChanged(t *testing.T) {
 	runner, store := newConfigStalenessTestRunner(t)
 	ctx := context.Background()
 
-	wf, err := store.CreateWorkflow(ctx, "Config Staleness SideEffect Test", fmt.Sprintf("user-%d", time.Now().UnixNano()))
+	userID := fmt.Sprintf("user-%d", time.Now().UnixNano())
+	testutil.EnsureUsers(t, userID)
+	wf, err := store.CreateWorkflow(ctx, "Config Staleness SideEffect Test", userID)
 	if err != nil {
 		t.Fatal(err)
 	}

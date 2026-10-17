@@ -289,7 +289,11 @@ func TestReserveAndFundRunFailsRatherThanSilentlyDegradingWhenRecordRunFundingFa
 		t.Fatal(err)
 	}
 
-	if _, err := store.RecordRunFunding(context.Background(), "unrelated-run-id", inboundTxID, 1); err != nil {
+	unrelatedRun, err := store.CreateRun(context.Background(), wf.ID, "test", []byte("{}"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.RecordRunFunding(context.Background(), unrelatedRun.ID, inboundTxID, 1); err != nil {
 		t.Fatal(err)
 	}
 

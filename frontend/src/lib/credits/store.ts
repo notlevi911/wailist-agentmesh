@@ -7,10 +7,11 @@ import type {
 } from "@/lib/credits/types";
 import type { PaymentMethod } from "@/components/checkout/types";
 import { credits as creditsApi, type PurchaseRecord } from "@/lib/api";
+import { LOW_BALANCE_THRESHOLD_USD } from "./fx";
 
 // Credit wallet state, shared across routes via useSyncExternalStore.
 //
-// Nothing here is persisted to the browser. Both fields are read back from the
+// Nothing here is persisted to the browser. The values are read back from the
 // server, and a local copy of either was a bug:
 //
 //   - balanceUSD comes from GET /credits/balance
@@ -24,14 +25,12 @@ import { credits as creditsApi, type PurchaseRecord } from "@/lib/api";
 //     on the same machine, showed history belonging to neither the session nor
 //     the money that actually moved.
 //
-// An `autoRecharge` config object used to be persisted here too. It was never
-// wired to a settings screen or a scheduled charge — only its threshold was
-// read, as a low-balance warning — so it collapsed to the
-// LOW_BALANCE_THRESHOLD_USD constant in fx.ts. Building the real feature is
-// tracked in #164.
+// The warning threshold arrives with the authenticated profile, even when
+// Settings has never been opened. It never schedules or authorizes a charge.
 
 const DEFAULT_STATE: CreditsState = {
   balanceUSD: 0,
+  lowBalanceThresholdUSD: LOW_BALANCE_THRESHOLD_USD,
   purchases: [],
 };
 
@@ -62,6 +61,7 @@ function clearLegacyStorage(): void {
 }
 
 let state: CreditsState = DEFAULT_STATE;
+let settingsOwner: string | null = null;
 const listeners = new Set<() => void>();
 
 // commit takes an updater rather than a finished state so a caller can never
@@ -103,6 +103,13 @@ function getServerSnapshot(): CreditsState {
 // Components should use useCredits so they re-render when it changes.
 export function readCredits(): CreditsState {
   return getSnapshot();
+}
+
+export function setAccountThreshold(owner: string, micros: number): void {
+  if (!Number.isSafeInteger(micros) || micros < 0) return;
+  if (settingsOwner !== null && settingsOwner !== owner) resetCredits();
+  settingsOwner = owner;
+  commit((prev) => ({ ...prev, lowBalanceThresholdUSD: micros / 1e6 }));
 }
 
 // KNOWN_METHODS bounds credit_ledger.provider to the PaymentMethod union the
@@ -200,21 +207,34 @@ export async function refreshPurchases(): Promise<void> {
 // yet" — without it a real empty balance and an unloaded one look identical,
 // and the UI would flash $0.00 on every page load.
 let balanceKnown = false;
+let balanceLoading = false;
+let balanceFailed = false;
+let balanceRequest = 0;
 
 // refreshBalance re-reads the authoritative balance. Call it on mount and
 // after anything that moves money (a completed run, a verified top-up).
 export async function refreshBalance(): Promise<void> {
   const started = epoch;
+  const request = ++balanceRequest;
+  const current = () => started === epoch && request === balanceRequest;
+  balanceLoading = true;
+  listeners.forEach((l) => l());
   try {
     const balanceUSD = await creditsApi.balance();
     // See refreshPurchases: a balance that arrives after a sign-out belongs to
     // the account that just left.
-    if (started !== epoch) return;
+    if (!current()) return;
     balanceKnown = true;
+    balanceFailed = false;
     commit((prev) => ({ ...prev, balanceUSD }));
   } catch {
-    // Leave the last known value in place; a failed poll is not evidence the
-    // balance changed, and blanking it would look like funds vanished.
+    // Retain the last amount, but distinguish a failed refresh from loading.
+    if (current()) balanceFailed = true;
+  } finally {
+    if (current()) {
+      balanceLoading = false;
+      listeners.forEach((l) => l());
+    }
   }
 }
 
@@ -230,7 +250,10 @@ export function resetCredits(): void {
   // Bump first: anything already in flight is now stale and must not write
   // its result back after this returns.
   epoch++;
+  settingsOwner = null;
   balanceKnown = false;
+  balanceLoading = false;
+  balanceFailed = false;
   purchasesKnown = false;
   purchasesFailed = false;
   commit(() => DEFAULT_STATE);
@@ -242,10 +265,12 @@ export function resetCredits(): void {
 // otherwise cannot tell a real reset from one that forgot to clear them.
 export function readCreditsFlags(): {
   balanceKnown: boolean;
+  balanceLoading: boolean;
+  balanceFailed: boolean;
   purchasesKnown: boolean;
   purchasesFailed: boolean;
 } {
-  return { balanceKnown, purchasesKnown, purchasesFailed };
+  return { balanceKnown, balanceLoading, balanceFailed, purchasesKnown, purchasesFailed };
 }
 
 // recordPurchase is called after a payment the client believes succeeded. It
@@ -262,6 +287,8 @@ export async function recordPurchase(): Promise<void> {
 
 export interface CreditsSnapshot extends CreditsState {
   balanceKnown: boolean;
+  balanceLoading: boolean;
+  balanceFailed: boolean;
   purchasesKnown: boolean;
   purchasesFailed: boolean;
   refreshBalance: typeof refreshBalance;
@@ -281,6 +308,8 @@ export function useCredits(): CreditsSnapshot {
     () => balanceKnown,
     () => false,
   );
+  const loading = useSyncExternalStore(subscribe, () => balanceLoading, () => false);
+  const failed = useSyncExternalStore(subscribe, () => balanceFailed, () => false);
   const purchasesLoaded = useSyncExternalStore(
     subscribe,
     () => purchasesKnown,
@@ -294,6 +323,8 @@ export function useCredits(): CreditsSnapshot {
   return {
     ...snapshot,
     balanceKnown: known,
+    balanceLoading: loading,
+    balanceFailed: failed,
     purchasesKnown: purchasesLoaded,
     purchasesFailed: purchasesErrored,
     refreshBalance,

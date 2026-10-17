@@ -97,19 +97,9 @@ func fetchRSS(ctx context.Context, node models.WorkflowNode, rc RunContexter) (a
 	}, nil
 }
 
-// hackerNewsAPIBase is overridden in tests via SetHackerNewsAPIBaseForTest.
-// This is Algolia's HN search API — one request returns matching stories,
-// unlike the Firebase API which needs an N+1 fetch per item id. No auth.
-var hackerNewsAPIBase = "https://hn.algolia.com/api/v1"
-
-// SetHackerNewsAPIBaseForTest overrides the HN search API base URL. Call only
-// from tests. Pass "" to reset to the real API.
+// SetHackerNewsAPIBaseForTest overrides the API base. Pass "" to restore the default.
 func SetHackerNewsAPIBaseForTest(base string) {
-	if base == "" {
-		hackerNewsAPIBase = "https://hn.algolia.com/api/v1"
-	} else {
-		hackerNewsAPIBase = base
-	}
+	setAPIBaseForTest("hackernews", base)
 }
 
 // fetchHackerNews searches Hacker News. No credential of any kind.
@@ -121,7 +111,7 @@ func fetchHackerNews(ctx context.Context, node models.WorkflowNode, rc RunContex
 	q := url.Values{}
 	q.Set("query", query)
 	q.Set("tags", configVal(node, "hnTags", "story"))
-	target := hackerNewsAPIBase + "/search?" + q.Encode()
+	target := apiBase("hackernews") + "/search?" + q.Encode()
 
 	raw, err := getAndDecode(ctx, target, nil, "HackerNews")
 	if err != nil {
@@ -160,19 +150,10 @@ func fetchHackerNews(ctx context.Context, node models.WorkflowNode, rc RunContex
 	return map[string]any{"count": len(items), "items": items}, nil
 }
 
-// coinGeckoAPIBase is overridden in tests via SetCoinGeckoAPIBaseForTest.
-// CoinGecko's /simple/price endpoint is usable without an API key.
-var coinGeckoAPIBase = "https://api.coingecko.com/api/v3"
-
-// SetCoinGeckoAPIBaseForTest overrides the CoinGecko API base URL. Call only
-// from tests. Pass "" to reset to the real API.
+// SetCoinGeckoAPIBaseForTest overrides the API base. Pass "" to restore the default.
 func SetCoinGeckoAPIBaseForTest(base string) {
 	resetCoinGeckoCache()
-	if base == "" {
-		coinGeckoAPIBase = "https://api.coingecko.com/api/v3"
-	} else {
-		coinGeckoAPIBase = base
-	}
+	setAPIBaseForTest("coingecko", base)
 }
 
 // fetchCoinGecko returns spot prices for the configured coin ids. No key.
@@ -185,7 +166,7 @@ func fetchCoinGecko(ctx context.Context, node models.WorkflowNode, rc RunContext
 	q := url.Values{}
 	q.Set("ids", ids)
 	q.Set("vs_currencies", currencies)
-	out, err := coinGeckoGet(ctx, coinGeckoAPIBase+"/simple/price?"+q.Encode())
+	out, err := coinGeckoGet(ctx, apiBase("coingecko")+"/simple/price?"+q.Encode())
 	if err == nil || ctx.Err() != nil {
 		return out, err
 	}
@@ -223,7 +204,7 @@ func fetchCoinGeckoHistory(ctx context.Context, node models.WorkflowNode, rc Run
 	q.Set("vs_currency", currency)
 	q.Set("days", days)
 	source := "coingecko"
-	raw, err := coinGeckoGet(ctx, coinGeckoAPIBase+"/coins/"+url.PathEscape(id)+"/market_chart?"+q.Encode())
+	raw, err := coinGeckoGet(ctx, apiBase("coingecko")+"/coins/"+url.PathEscape(id)+"/market_chart?"+q.Encode())
 	if err != nil {
 		if ctx.Err() != nil {
 			return nil, err

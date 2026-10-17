@@ -8,6 +8,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/agentmesh/backend/internal/models"
 	"github.com/agentmesh/backend/internal/tendril"
@@ -503,6 +504,10 @@ func TestResolveLeaseAllowsOwnLease(t *testing.T) {
 }
 
 type fakeTendrilStore struct {
+	activeLeases    []models.TendrilLease
+	activeLeaseErr  error
+	hasLatestLease  bool
+	latestLease     models.TendrilLease
 	tendrilCredit   int64
 	agentMeshCredit int64
 	refunded        int64
@@ -539,10 +544,25 @@ func (f *fakeTendrilStore) MarkTendrilLeaseReleased(_ context.Context, id string
 	return true, nil
 }
 func (f *fakeTendrilStore) LatestActiveLeaseForRun(_ context.Context, _ string) (models.TendrilLease, error) {
+	if f.hasLatestLease {
+		return f.latestLease, nil
+	}
 	return models.TendrilLease{}, nil
 }
 func (f *fakeTendrilStore) LatestActiveLeaseForUser(_ context.Context, _ string) (models.TendrilLease, error) {
+	if f.hasLatestLease {
+		return f.latestLease, nil
+	}
 	return models.TendrilLease{}, nil
+}
+func (f *fakeTendrilStore) ListActiveTendrilLeases(_ context.Context, _ string) ([]models.TendrilLease, error) {
+	if f.activeLeaseErr != nil || f.activeLeases != nil {
+		return f.activeLeases, f.activeLeaseErr
+	}
+	if f.hasLatestLease {
+		return []models.TendrilLease{f.latestLease}, nil
+	}
+	return nil, nil
 }
 func (f *fakeTendrilStore) TendrilCreditBalance(_ context.Context, _ string) (int64, error) {
 	return f.tendrilCredit, nil
@@ -568,4 +588,187 @@ func (f *fakeTendrilStore) ChargeTendrilCredit(_ context.Context, _, leaseID, ki
 	}
 	f.tendrilCredit -= amount
 	return nil
+}
+
+func TestParseAutoBudgetUSD(t *testing.T) {
+	ok := map[string]float64{"": autoRentDefaultBudgetUSD, "1": 1, "2.5": 2.5, " 5 ": 5}
+	for in, want := range ok {
+		got, err := parseAutoBudgetUSD(in)
+		if err != nil {
+			t.Errorf("parseAutoBudgetUSD(%q) errored: %v", in, err)
+			continue
+		}
+		if got != want {
+			t.Errorf("parseAutoBudgetUSD(%q) = %v, want %v", in, got, want)
+		}
+	}
+	for _, bad := range []string{"0", "-1", "abc"} {
+		if _, err := parseAutoBudgetUSD(bad); err == nil {
+			t.Errorf("parseAutoBudgetUSD(%q) should have errored", bad)
+		}
+	}
+}
+
+// An auto node with an already-active, still-funded lease must reuse it --
+// no market lookup, no reservation, no rent -- and run the payload straight
+// against that lease's own token.
+func TestAutoReusesActiveLeaseWithoutRenting(t *testing.T) {
+	for _, machineID := range []string{"", "m1"} {
+		t.Run("machine="+machineID, func(t *testing.T) {
+			var hits []struct{ path, auth string }
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				hits = append(hits, struct{ path, auth string }{r.URL.Path, r.Header.Get("Authorization")})
+				w.Header().Set("Content-Type", "application/json")
+				w.Write([]byte(`{"ok":true}`))
+			}))
+			defer srv.Close()
+
+			enc, err := wallet.Encrypt("plain-token", testEncKey)
+			if err != nil {
+				t.Fatalf("Encrypt: %v", err)
+			}
+			store := &fakeTendrilStore{
+				hasLatestLease: true,
+				latestLease: models.TendrilLease{
+					ID: "row1", UserID: "user1", LeaseID: "lease1", Status: "active", TendrilNodeID: "m1",
+					LeaseTokenEnc: enc, FundedUntil: time.Now().Add(time.Hour),
+					StartedAt: time.Now().Add(-15 * time.Minute), HoursPurchased: 1,
+				},
+			}
+			node := models.WorkflowNode{
+				TendrilAction: "auto", TendrilNodeID: machineID,
+				CustomParams: []models.CustomParam{{Name: "payload", Value: "print(1)"}},
+			}
+			cfg := TendrilConfig{
+				Client: tendril.NewClient(srv.URL), Store: store, EncryptKey: testEncKey,
+				UserID: "user1", RunID: "run1",
+			}
+			if _, err := executeTendrilAuto(context.Background(), node, emptyRunContext{}, cfg); err != nil {
+				t.Fatalf("executeTendrilAuto: %v", err)
+			}
+			if len(hits) != 1 || hits[0].path != "/x402/run" {
+				t.Fatalf("hits = %+v, want exactly one call to /x402/run (no market lookup, no rent)", hits)
+			}
+			if hits[0].auth != "Bearer plain-token" {
+				t.Errorf("auth = %q, want the reused lease's own decrypted token", hits[0].auth)
+			}
+			if store.tendrilCredit != 0 {
+				t.Errorf("tendril credit = %d, want 0 -- reusing a lease must not touch it", store.tendrilCredit)
+			}
+
+		})
+	}
+}
+
+// With no active lease and no explicit budget, an auto node must fall back
+// to autoRentDefaultBudgetUSD and auto-fund the shortfall before renting --
+// this pins the $2/hr * 0.5h = $1 arithmetic issue #173's "one dollar" ask
+// describes, by asserting the exact topup amount it computes and requests.
+func TestAutoRentsWithDefaultBudgetWhenNoActiveLease(t *testing.T) {
+	var paths []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		paths = append(paths, r.URL.Path+"?"+r.URL.RawQuery)
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/platform":
+			w.Write([]byte(`{}`))
+		case "/explorer":
+			w.Write([]byte(`{"nodes":[{"id":"m1","label":"M1","cpuCores":2,"ramMb":2048,"pricePerHourUsd":2,"status":"online"}]}`))
+		default:
+			// Not a 402 -- no payment challenge was ever issued, so
+			// performTopup must refuse to mint credit (see
+			// TestTopupRefusesToCreditWithoutRealSettlement). Good enough to
+			// prove auto reached the topup call with the right amount.
+			w.Write([]byte(`{"status":"degraded"}`))
+		}
+	}))
+	defer srv.Close()
+
+	store := &fakeTendrilStore{agentMeshCredit: 10_000_000}
+	node := models.WorkflowNode{
+		TendrilAction: "auto",
+		CustomParams:  []models.CustomParam{{Name: "payload", Value: "print(1)"}},
+	}
+	cfg := TendrilConfig{Client: tendril.NewClient(srv.URL), Store: store, UserID: "user1", RunID: "run1"}
+	_, err := executeTendrilAuto(context.Background(), node, emptyRunContext{}, cfg)
+	if err == nil || !strings.Contains(err.Error(), "auto topup") {
+		t.Fatalf("executeTendrilAuto error = %v, want a wrapped auto-topup error (no 402 was ever offered)", err)
+	}
+	// $1 default budget / $2/hr machine = 0.5h; RequiredCreditAtomic(2_000_000, 0.5) = 1_000_000.
+	wantAmount := "amount=1000000"
+	found := false
+	for _, p := range paths {
+		if p == "/topup?"+wantAmount {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("requested paths = %v, want a /topup call with %s", paths, wantAmount)
+	}
+}
+
+// A budget that would buy more than maxTendrilHours on a cheap machine must
+// be capped, not used to rent a multi-day lease by accident.
+func TestAutoCapsHoursAtMax(t *testing.T) {
+	var paths []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		paths = append(paths, r.URL.Path+"?"+r.URL.RawQuery)
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/platform":
+			w.Write([]byte(`{}`))
+		case "/explorer":
+			w.Write([]byte(`{"nodes":[{"id":"m1","label":"M1","cpuCores":1,"ramMb":512,"pricePerHourUsd":0.01,"status":"online"}]}`))
+		default:
+			w.Write([]byte(`{"status":"degraded"}`))
+		}
+	}))
+	defer srv.Close()
+
+	store := &fakeTendrilStore{agentMeshCredit: 10_000_000}
+	node := models.WorkflowNode{
+		TendrilAction: "auto",
+		CustomParams:  []models.CustomParam{{Name: "payload", Value: "print(1)"}},
+	}
+	cfg := TendrilConfig{Client: tendril.NewClient(srv.URL), Store: store, UserID: "user1", RunID: "run1"}
+	_, _ = executeTendrilAuto(context.Background(), node, emptyRunContext{}, cfg)
+	// $1 budget / $0.01/hr would be 100h uncapped; capped at 24h:
+	// RequiredCreditAtomic(10_000, 24) = 240_000.
+	wantAmount := "amount=240000"
+	found := false
+	for _, p := range paths {
+		if p == "/topup?"+wantAmount {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("requested paths = %v, want a /topup call with %s (hours capped at %v)", paths, wantAmount, maxTendrilHours)
+	}
+}
+
+func TestAutoErrorsWhenNoMachinesOnline(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"nodes":[]}`))
+	}))
+	defer srv.Close()
+
+	store := &fakeTendrilStore{agentMeshCredit: 10_000_000}
+	node := models.WorkflowNode{
+		TendrilAction: "auto",
+		CustomParams:  []models.CustomParam{{Name: "payload", Value: "print(1)"}},
+	}
+	cfg := TendrilConfig{Client: tendril.NewClient(srv.URL), Store: store, UserID: "user1", RunID: "run1"}
+	if _, err := executeTendrilAuto(context.Background(), node, emptyRunContext{}, cfg); err == nil {
+		t.Fatal("want an error when no machines are online")
+	}
+}
+
+func TestAutoRequiresPayload(t *testing.T) {
+	store := &fakeTendrilStore{}
+	node := models.WorkflowNode{TendrilAction: "auto"}
+	cfg := TendrilConfig{Store: store, UserID: "user1", RunID: "run1"}
+	if _, err := executeTendrilAuto(context.Background(), node, emptyRunContext{}, cfg); err == nil {
+		t.Fatal("want an error when the auto node has no payload")
+	}
 }

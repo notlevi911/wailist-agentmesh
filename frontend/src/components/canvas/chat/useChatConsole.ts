@@ -5,6 +5,7 @@ import { useChatSession, type ChatSession } from "./useChatSession";
 import { resolveReply } from "./resolveReply";
 import { recoverPendingTurn } from "./recoverPendingTurn";
 import type { BuildProgress } from "./buildProgress";
+import type { RunCosts } from "@/lib/runCosts";
 import {
   runs as runsApi,
   type RunLogRecord,
@@ -36,6 +37,8 @@ export interface ChatConsole {
   busy: boolean;
   handleSend: (text: string) => void;
   deadLetters: DeadLetterRun[];
+  /** What the current run was charged -- see RunTranscript.costs. */
+  costs: RunCosts | null;
 }
 
 // Owns the run transcript (SSE + reconciliation) and the chat session
@@ -51,7 +54,7 @@ export function useChatConsole({
   onBuildMessage,
   attempt,
 }: UseChatConsoleArgs): ChatConsole {
-  const { logs, elapsed, done, leaseId, stopped, deadLetters } =
+  const { logs, elapsed, done, leaseId, stopped, deadLetters, costs } =
     useRunTranscript({
       runId,
       running,
@@ -186,7 +189,9 @@ export function useChatConsole({
   }, [hydrated, runId, conversation, completeTurnById]);
 
   const handleSend = (text: string) => {
-    const turnId = session.startTurn(text);
+    // A build turn is marked so a run started mid-build (topbar Run) can't
+    // bind to it -- see ChatMessage.build.
+    const turnId = session.startTurn(text, { build: buildMode });
     // A send that never becomes a run (offline, not deployed, backend
     // refusal) has nothing left to settle its turn -- startRun only surfaces
     // a toast -- so the bubble would spin forever. Settle it here instead.
@@ -207,7 +212,7 @@ export function useChatConsole({
             res.reply ??
             (res.ok
               ? "Done."
-              : "Could not update the workflow — see the notification for why, then try again."),
+              : "Could not update the workflow: see the notification for why, then try again."),
           isError: !res.ok,
         });
         // Only now: leaving build mode swaps the transcript under this hook,
@@ -220,7 +225,7 @@ export function useChatConsole({
       const ok = (await onSendMessage?.(text)) ?? false;
       if (!ok) {
         completeTurnById(turnId, {
-          text: "Could not start this run — see the notification for why, then try again.",
+          text: "Could not start this run: see the notification for why, then try again.",
           isError: true,
         });
       }
@@ -248,5 +253,6 @@ export function useChatConsole({
     busy,
     handleSend,
     deadLetters,
+    costs,
   };
 }

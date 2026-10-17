@@ -141,6 +141,20 @@ func TestAllowedHeadersIncludesTheEditorKey(t *testing.T) {
 	}
 }
 
+// Every method a route uses must be on the allow-list, or the native shell --
+// a cross-origin caller -- has it refused at preflight while the same-origin
+// web app works fine. PATCH /auth/me (onboarding's name/org save) was missing,
+// so every new Android sign-up stalled at "Add your name".
+func TestAllowedMethodsCoverEveryRouteMethod(t *testing.T) {
+	res := corsResponse(t, webOrigin+","+shellOrigin, shellOrigin)
+	got := res.Header.Get("Access-Control-Allow-Methods")
+	for _, m := range []string{"GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"} {
+		if !strings.Contains(got, m) {
+			t.Errorf("allow-methods = %q, want it to include %s", got, m)
+		}
+	}
+}
+
 // Preflight must short-circuit and still carry the headers.
 func TestPreflightAnswersWithoutReachingTheHandler(t *testing.T) {
 	t.Setenv(corsEnvName, webOrigin+","+shellOrigin)

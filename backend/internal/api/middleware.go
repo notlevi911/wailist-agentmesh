@@ -106,7 +106,7 @@ func corsMiddleware(next http.Handler) http.Handler {
 		// to the native shell, and the failure looks like an intermittent
 		// CORS error with no pattern to it.
 		w.Header().Add("Vary", "Origin")
-		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
+		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS")
 		// x402 clients send payment proofs via Payment-Signature (the v2
 		// spec's canonical header, base64 JSON) or X-Payment (legacy, raw
 		// JSON); X-Relay-Method and X-Relay-Body tell the relay what to

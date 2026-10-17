@@ -136,3 +136,36 @@ func (t CatalogTemplate) keysWhere(where string) []string {
 	}
 	return out
 }
+
+// exampleConfigKeys are the config keys whose placeholder earns its bytes in
+// the prompt: the ones a build gets wrong in a way an example prevents -- a
+// path syntax, a template, a date or range format. Every other config key is
+// listed by name only, and describe_node has the full detail for the two or
+// three templates a build actually uses.
+// Every key here must have a placeholder in the catalog, or keeping it buys
+// nothing (httpBodyTemplate and messageTemplate have none, so listing them
+// was a no-op). dtOffset and graphqlVariables earn their place: a wrong
+// offset or a malformed variables object fails at run time, not at build
+// time. TestExampleConfigKeysAllHavePlaceholders enforces both halves.
+var exampleConfigKeys = map[string]bool{
+	"jsonPath": true, "sheetsRange": true, "calendarStart": true,
+	"calendarEnd": true, "graphqlQuery": true, "graphqlVariables": true,
+	"dtFormat": true, "dtOffset": true,
+}
+
+// keysWhereAnnotated is keysWhere with "(e.g. ...)" appended for the keys in
+// withExample only.
+func (t CatalogTemplate) keysWhereAnnotated(where string, withExample map[string]bool) []string {
+	var out []string
+	for _, f := range t.Fields {
+		if f.Where != where {
+			continue
+		}
+		if withExample[f.Key] && f.Placeholder != "" && len(f.Placeholder) <= 40 {
+			out = append(out, fmt.Sprintf("%s (e.g. %s)", f.Key, f.Placeholder))
+			continue
+		}
+		out = append(out, f.Key)
+	}
+	return out
+}

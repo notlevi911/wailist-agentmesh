@@ -66,11 +66,37 @@ describe("WorkflowsPage", () => {
     expect(screen.getByText("Page 1 of 3")).toBeTruthy();
   });
 
+  it("keeps row and grid pagination aligned and clamps a filtered page", async () => {
+    state.list.mockResolvedValue(Array.from({ length: 12 }, (_, i) => ({
+      id: `wf-${i}`, name: `Workflow ${i}`, nodes: [], edges: [], status: "draft",
+    })));
+    render(<WorkflowsPage />);
+    await screen.findByLabelText("workflows per page");
+    expect(screen.getByRole("link", { name: "Workflow 0" })).toBeTruthy();
+    expect(screen.queryByText("Workflow 10")).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: /next/i }));
+    expect(screen.getByRole("link", { name: "Workflow 10" })).toBeTruthy();
+    expect(screen.queryByText("Workflow 0")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Grid" }));
+    expect(screen.getByText("Workflow 10")).toBeTruthy();
+    expect(screen.getByText("Page 2 of 2")).toBeTruthy();
+
+    fireEvent.change(screen.getByPlaceholderText("Search workflows, tags…"), {
+      target: { value: "Workflow 0" },
+    });
+    expect(screen.getByText("Workflow 0")).toBeTruthy();
+    expect(screen.queryByText("Workflow 10")).toBeNull();
+    expect(screen.queryByText("no workflows match")).toBeNull();
+  });
+
   it("gives a phone the thin list, without the desktop chrome", async () => {
     state.readOnly = true;
     render(<WorkflowsPage />);
     expect(
-      await screen.findByRole("link", { name: /Customer Support Triage/ }),
+      await screen.findByRole("link", {
+        name: /Customer Support Triage, deployed/,
+      }),
     ).toBeTruthy();
     expect(screen.getByRole("button", { name: /add credits/i })).toBeTruthy();
     expect(screen.queryByText(/Rows|Grid/)).toBeNull();
@@ -78,33 +104,32 @@ describe("WorkflowsPage", () => {
     expect(screen.queryByRole("button", { name: /^Open$|^Zone/ })).toBeNull();
   });
 
-  it("keeps the desktop page as it was", async () => {
+  it("keeps desktop navigation and Usage actions available", async () => {
     render(<WorkflowsPage />);
     expect(await screen.findByText("Customer Support Triage")).toBeTruthy();
     expect(screen.getByText(/Rows/)).toBeTruthy();
-    // No "Open" button: the row itself is the control. The phone assertion
-    // above still checks that the desktop row actions stay off a handheld,
-    // via the Zone button that lives beside where Open used to be.
     expect(screen.queryByRole("button", { name: "Open" })).toBeNull();
-    // ...but the row is a div with an onClick, so the name has to be a real
-    // link or the Rows view has no keyboard route into a workflow at all.
-    // Raised in code review when the button was removed.
     const link = screen.getByRole("link", { name: "Customer Support Triage" });
     expect(link.getAttribute("href")).toContain("/workflows/");
-    // The eyebrow, which is desktop-only chrome. It replaces an assertion on
-    // the "Design, deploy, and monitor agent pipelines." subtitle that used
-    // to sit under the h1 -- that line restated its own heading and is gone.
     expect(screen.getByText(/your workspace/i)).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Usage" }));
+    expect(state.push).toHaveBeenCalledWith("/usage?workflow=wf-1");
   });
 
   // The row name is an <a> over a div that also routes on click, so its
   // handler has to tell the two kinds of click apart.
-  describe("the row name's click handling", () => {
-    it("routes a plain click client-side instead of loading the page", async () => {
+  describe.each(["Rows", "Grid"])("the %s workflow link", (view) => {
+    async function workflowLink() {
       render(<WorkflowsPage />);
-      const link = await screen.findByRole("link", {
-        name: "Customer Support Triage",
-      });
+      await screen.findByText("Customer Support Triage");
+      if (view === "Grid") {
+        fireEvent.click(screen.getByRole("button", { name: "Grid" }));
+      }
+      return screen.getByRole("link", { name: "Customer Support Triage" });
+    }
+
+    it("routes a plain click client-side instead of loading the page", async () => {
+      const link = await workflowLink();
       // fireEvent returns false when the event was cancelled, which is what
       // preventDefault-then-router.push looks like from the outside.
       expect(fireEvent.click(link)).toBe(false);
@@ -114,10 +139,7 @@ describe("WorkflowsPage", () => {
     });
 
     it("lets a cmd-click open a new tab rather than routing this one", async () => {
-      render(<WorkflowsPage />);
-      const link = await screen.findByRole("link", {
-        name: "Customer Support Triage",
-      });
+      const link = await workflowLink();
       // Not cancelled: the browser is left to honour the href, which is the
       // whole point of the name being a link. The handler used to
       // preventDefault every click, so a cmd-click navigated this tab.
@@ -128,10 +150,7 @@ describe("WorkflowsPage", () => {
     });
 
     it("treats ctrl and shift the same way", async () => {
-      render(<WorkflowsPage />);
-      const link = await screen.findByRole("link", {
-        name: "Customer Support Triage",
-      });
+      const link = await workflowLink();
       expect(fireEvent.click(link, { ctrlKey: true })).toBe(true);
       expect(fireEvent.click(link, { shiftKey: true })).toBe(true);
       expect(state.push).not.toHaveBeenCalled();

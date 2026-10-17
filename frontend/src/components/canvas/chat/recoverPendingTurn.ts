@@ -69,7 +69,7 @@ export function recoverPendingTurn(
   if (!run) {
     return {
       kind: "interrupted",
-      text: "Interrupted before this run started — send the message again to retry.",
+      text: "Interrupted before this run started: send the message again to retry.",
     };
   }
 
@@ -78,7 +78,7 @@ export function recoverPendingTurn(
   if (!TERMINAL.has(run.status)) {
     return {
       kind: "interrupted",
-      text: "Interrupted by a reload while this run was still going — open the logs to see how it finished.",
+      text: "Interrupted by a reload while this run was still going: open the logs to see how it finished.",
     };
   }
 

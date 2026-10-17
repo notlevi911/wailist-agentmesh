@@ -14,18 +14,9 @@ import (
 	"github.com/agentmesh/backend/internal/models"
 )
 
-// hubspotAPIBase is overridden in tests via SetHubSpotAPIBaseForTest.
-var hubspotAPIBase = "https://api.hubapi.com"
-
 // SetHubSpotAPIBaseForTest overrides the HubSpot API base URL. Call only
 // from tests. Pass "" to reset to the real API.
-func SetHubSpotAPIBaseForTest(base string) {
-	if base == "" {
-		hubspotAPIBase = "https://api.hubapi.com"
-	} else {
-		hubspotAPIBase = base
-	}
-}
+func SetHubSpotAPIBaseForTest(base string) { setAPIBaseForTest("hubspot", base) }
 
 func sendHubSpot(ctx context.Context, node models.WorkflowNode, rc RunContexter) (any, error) {
 	// OAuth-linked token takes priority: HubSpot's OAuth access token works
@@ -44,20 +35,15 @@ func sendHubSpot(ctx context.Context, node models.WorkflowNode, rc RunContexter)
 		},
 	}
 	headers := map[string]string{"Authorization": "Bearer " + apiKey}
-	return postJSON(ctx, hubspotAPIBase+"/crm/v3/objects/notes", headers, payload, "hubspot_note_created", "HubSpot")
+	return postJSON(ctx, apiBase("hubspot")+"/crm/v3/objects/notes", headers, payload, "hubspot_note_created", "HubSpot")
 }
-
-// mailchimpAPIBase is overridden in tests via SetMailchimpAPIBaseForTest —
-// normally "https://{dc}.api.mailchimp.com" is built per-node from the API
-// key's datacenter suffix, so the test override replaces the whole
-// scheme+host and sendMailchimp skips that construction when set.
-var mailchimpAPIBase = ""
 
 // SetMailchimpAPIBaseForTest overrides the Mailchimp API base URL entirely.
+// Normally "https://{dc}.api.mailchimp.com" is built per-node from the API
+// key's datacenter suffix, so the test override replaces the whole
+// scheme+host and sendMailchimp skips that construction when set.
 // Call only from tests. Pass "" to reset to the real per-datacenter host.
-func SetMailchimpAPIBaseForTest(base string) {
-	mailchimpAPIBase = base
-}
+func SetMailchimpAPIBaseForTest(base string) { setAPIBaseForTest("mailchimp", base) }
 
 func sendMailchimp(ctx context.Context, node models.WorkflowNode, rc RunContexter) (any, error) {
 	listID := configVal(node, "mailchimpListID", "")
@@ -87,7 +73,7 @@ func sendMailchimp(ctx context.Context, node models.WorkflowNode, rc RunContexte
 		if dc == "" {
 			return "mailchimp_skipped_missing_config", ErrActionSkipped
 		}
-		base := mailchimpAPIBase
+		base := apiBase("mailchimp")
 		if base == "" {
 			base = "https://" + dc + ".api.mailchimp.com"
 		}
@@ -111,7 +97,7 @@ func sendMailchimp(ctx context.Context, node models.WorkflowNode, rc RunContexte
 	if apiKey == "" {
 		return "mailchimp_skipped_no_api_key", ErrActionSkipped
 	}
-	base := mailchimpAPIBase
+	base := apiBase("mailchimp")
 	if base == "" {
 		dc, err := mailchimpDatacenter(apiKey)
 		if err != nil {

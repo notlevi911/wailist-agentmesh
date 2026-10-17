@@ -22,7 +22,7 @@ const CLOCK_MS = 30_000;
 
 // The Workflows screen on a phone: a title, the credit balance, search with
 // a filter beside it, and one thin row per workflow. Creating and editing
-// happen on a desktop, so none of the desktop page's actions appear here.
+// happen on a desktop; the only row action here is read-only scoped usage.
 export function WorkflowsPhoneList({
   workflows,
   loading,

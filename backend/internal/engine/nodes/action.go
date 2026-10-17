@@ -195,18 +195,9 @@ func sendEmail(ctx context.Context, node models.WorkflowNode, rc RunContexter) (
 	}
 }
 
-// resendAPIBase is overridden in tests via SetResendAPIBaseForTest.
-var resendAPIBase = "https://api.resend.com"
-
 // SetResendAPIBaseForTest overrides the Resend API base URL. Call only
 // from tests. Pass "" to reset to the real API.
-func SetResendAPIBaseForTest(base string) {
-	if base == "" {
-		resendAPIBase = "https://api.resend.com"
-	} else {
-		resendAPIBase = base
-	}
-}
+func SetResendAPIBaseForTest(base string) { setAPIBaseForTest("resend", base) }
 
 func sendViaResend(ctx context.Context, apiKey, from, to, subject, body string) (any, error) {
 	payload := map[string]any{
@@ -216,21 +207,12 @@ func sendViaResend(ctx context.Context, apiKey, from, to, subject, body string) 
 		"text":    body,
 	}
 	headers := map[string]string{"Authorization": "Bearer " + apiKey}
-	return postJSON(ctx, resendAPIBase+"/emails", headers, payload, "email_sent", "Resend")
+	return postJSON(ctx, apiBase("resend")+"/emails", headers, payload, "email_sent", "Resend")
 }
-
-// sendGridAPIBase is overridden in tests via SetSendGridAPIBaseForTest.
-var sendGridAPIBase = "https://api.sendgrid.com"
 
 // SetSendGridAPIBaseForTest overrides the SendGrid API base URL. Call only
 // from tests. Pass "" to reset to the real API.
-func SetSendGridAPIBaseForTest(base string) {
-	if base == "" {
-		sendGridAPIBase = "https://api.sendgrid.com"
-	} else {
-		sendGridAPIBase = base
-	}
-}
+func SetSendGridAPIBaseForTest(base string) { setAPIBaseForTest("sendgrid", base) }
 
 func sendViaSendGrid(ctx context.Context, apiKey, from, to, subject, body string) (any, error) {
 	fromName, fromEmail := parseEmailAddress(from)
@@ -245,21 +227,12 @@ func sendViaSendGrid(ctx context.Context, apiKey, from, to, subject, body string
 		"content":          []map[string]any{{"type": "text/plain", "value": body}},
 	}
 	headers := map[string]string{"Authorization": "Bearer " + apiKey}
-	return postJSON(ctx, sendGridAPIBase+"/v3/mail/send", headers, payload, "email_sent", "SendGrid")
+	return postJSON(ctx, apiBase("sendgrid")+"/v3/mail/send", headers, payload, "email_sent", "SendGrid")
 }
-
-// brevoAPIBase is overridden in tests via SetBrevoAPIBaseForTest.
-var brevoAPIBase = "https://api.brevo.com"
 
 // SetBrevoAPIBaseForTest overrides the Brevo API base URL. Call only from
 // tests. Pass "" to reset to the real API.
-func SetBrevoAPIBaseForTest(base string) {
-	if base == "" {
-		brevoAPIBase = "https://api.brevo.com"
-	} else {
-		brevoAPIBase = base
-	}
-}
+func SetBrevoAPIBaseForTest(base string) { setAPIBaseForTest("brevo", base) }
 
 func sendViaBrevo(ctx context.Context, apiKey, from, to, subject, body string) (any, error) {
 	fromName, fromEmail := parseEmailAddress(from)
@@ -274,21 +247,12 @@ func sendViaBrevo(ctx context.Context, apiKey, from, to, subject, body string) (
 		"textContent": body,
 	}
 	headers := map[string]string{"api-key": apiKey}
-	return postJSON(ctx, brevoAPIBase+"/v3/smtp/email", headers, payload, "email_sent", "Brevo")
+	return postJSON(ctx, apiBase("brevo")+"/v3/smtp/email", headers, payload, "email_sent", "Brevo")
 }
-
-// postmarkAPIBase is overridden in tests via SetPostmarkAPIBaseForTest.
-var postmarkAPIBase = "https://api.postmarkapp.com"
 
 // SetPostmarkAPIBaseForTest overrides the Postmark API base URL. Call only
 // from tests. Pass "" to reset to the real API.
-func SetPostmarkAPIBaseForTest(base string) {
-	if base == "" {
-		postmarkAPIBase = "https://api.postmarkapp.com"
-	} else {
-		postmarkAPIBase = base
-	}
-}
+func SetPostmarkAPIBaseForTest(base string) { setAPIBaseForTest("postmark", base) }
 
 func sendViaPostmark(ctx context.Context, apiKey, from, to, subject, body string) (any, error) {
 	payload := map[string]any{
@@ -298,7 +262,7 @@ func sendViaPostmark(ctx context.Context, apiKey, from, to, subject, body string
 		"TextBody": body,
 	}
 	headers := map[string]string{"X-Postmark-Server-Token": apiKey}
-	return postJSON(ctx, postmarkAPIBase+"/email", headers, payload, "email_sent", "Postmark")
+	return postJSON(ctx, apiBase("postmark")+"/email", headers, payload, "email_sent", "Postmark")
 }
 
 // parseEmailAddress splits an RFC5322-style "Name <email>" string into name and

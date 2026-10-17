@@ -38,7 +38,7 @@ export function formatDuration(
 ): string {
   const start = Date.parse(startedAt);
   const end = finishedAt ? Date.parse(finishedAt) : now;
-  if (Number.isNaN(start) || Number.isNaN(end) || end < start) return "—";
+  if (Number.isNaN(start) || Number.isNaN(end) || end < start) return "-";
   const total = Math.round((end - start) / 1000);
   if (total < 60) return `${total}s`;
   const minutes = Math.floor(total / 60);
@@ -53,9 +53,9 @@ export function formatUntil(
   at: string | undefined | null,
   now: number = Date.now(),
 ): string {
-  if (!at) return "—";
+  if (!at) return "-";
   const due = Date.parse(at);
-  if (Number.isNaN(due)) return "—";
+  if (Number.isNaN(due)) return "-";
   const ms = due - now;
   if (ms <= 0) return "now";
   // Rounded up, so a run 20 seconds away is "in 1 min", never "in 0 min";

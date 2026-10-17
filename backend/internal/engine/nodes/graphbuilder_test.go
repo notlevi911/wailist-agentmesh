@@ -564,35 +564,31 @@ func TestAddNodeRejectsCronTrigger(t *testing.T) {
 	}
 }
 
-func TestAddNodeCreatesGoogleNodes(t *testing.T) {
+func TestAddNodeCreatesStateAndGoogleNodes(t *testing.T) {
 	graph := &models.WorkflowGraph{}
-	if _, err := applyGraphOp(graph, "add_node", map[string]any{"type": "google", "template": "gmail_list"}); err != nil {
+	if _, err := applyGraphOp(graph, "add_node", map[string]any{"type": "state", "template": "set"}); err != nil {
+		t.Fatalf("state node: %v", err)
+	}
+	if _, err := applyGraphOp(graph, "add_node", map[string]any{"type": "google", "template": "sheets_read"}); err != nil {
 		t.Fatalf("google node: %v", err)
 	}
 }
 
-// State was dropped from the palette and the catalogue, so the builder must
-// no longer be able to reach for one -- the type still exists in models for
-// graphs saved before the removal, which is exactly why this is worth
-// asserting rather than assuming.
-func TestAddNodeRejectsStateNode(t *testing.T) {
-	graph := &models.WorkflowGraph{}
-	if _, err := applyGraphOp(graph, "add_node", map[string]any{"type": "state", "template": "set"}); err == nil {
-		t.Fatal("state is not in the catalogue; add_node must refuse it")
-	}
-}
-
-// A Tendril node with no tendrilAction fails outright. The palette sets it on
-// drop, and the catalogue is what tells the builder to do the same.
+// A "Write State" node with no stateOp silently runs get; a Tendril node with
+// no tendrilAction fails outright. The palette sets both on drop.
 func TestAddNodeAppliesCatalogPresets(t *testing.T) {
 	graph := &models.WorkflowGraph{}
+	applyGraphOp(graph, "add_node", map[string]any{"type": "state", "template": "set"})
 	applyGraphOp(graph, "add_node", map[string]any{"type": "tendril", "template": "tendril_rent"})
 	applyGraphOp(graph, "add_node", map[string]any{"type": "provider", "template": "gemini"})
-	if graph.Nodes[0].TendrilAction != "rent" || graph.Nodes[0].TendrilHours != "1" {
-		t.Fatalf("tendril_rent presets not applied: %+v", graph.Nodes[0])
+	if graph.Nodes[0].StateOp != "set" {
+		t.Fatalf("state/set must preset stateOp=set, got %q", graph.Nodes[0].StateOp)
 	}
-	if graph.Nodes[1].Model != "gemini-2.5-flash" {
-		t.Fatalf("provider/gemini must preset its default model, got %q", graph.Nodes[1].Model)
+	if graph.Nodes[1].TendrilAction != "rent" || graph.Nodes[1].TendrilHours != "1" {
+		t.Fatalf("tendril_rent presets not applied: %+v", graph.Nodes[1])
+	}
+	if graph.Nodes[2].Model != "gemini-2.5-flash" {
+		t.Fatalf("provider/gemini must preset its default model, got %q", graph.Nodes[2].Model)
 	}
 }
 
@@ -648,7 +644,7 @@ func TestAddNodeRejectsConnectorCredentialWithItsSource(t *testing.T) {
 func TestAddNodeRejectsGoogleAccountConnection(t *testing.T) {
 	graph := &models.WorkflowGraph{}
 	_, err := applyGraphOp(graph, "add_node", map[string]any{
-		"type": "google", "template": "gmail_list",
+		"type": "google", "template": "gmail_send",
 		"config": map[string]any{"oauthCredentialID": "whatever"},
 	})
 	if err == nil {
@@ -656,24 +652,15 @@ func TestAddNodeRejectsGoogleAccountConnection(t *testing.T) {
 	}
 }
 
-// Used to be written against state get->set. The State node type was dropped
-// from the palette and the catalogue, so the case is expressed with provider
-// templates instead -- the behaviour under test is the catalogue's presets
-// being re-applied on a template change, not anything specific to state.
 func TestUpdateNodeTemplateChangeReappliesPresets(t *testing.T) {
 	graph := &models.WorkflowGraph{}
-	if _, err := applyGraphOp(graph, "add_node", map[string]any{"type": "provider", "template": "gemini"}); err != nil {
-		t.Fatalf("add_node: %v", err)
-	}
-	if graph.Nodes[0].Model != "gemini-2.5-flash" {
-		t.Fatalf("the added node should carry gemini's preset model, got %q", graph.Nodes[0].Model)
-	}
+	applyGraphOp(graph, "add_node", map[string]any{"type": "state", "template": "get"})
 	id := graph.Nodes[0].ID
-	if _, err := applyGraphOp(graph, "update_node", map[string]any{"id": id, "template": "openai"}); err != nil {
+	if _, err := applyGraphOp(graph, "update_node", map[string]any{"id": id, "template": "set"}); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if graph.Nodes[0].Model != "gpt-4.1" {
-		t.Fatalf("changing gemini->openai must move the preset model too, got %q", graph.Nodes[0].Model)
+	if graph.Nodes[0].StateOp != "set" {
+		t.Fatalf("changing state get->set must move stateOp too, got %q", graph.Nodes[0].StateOp)
 	}
 }
 
@@ -2281,6 +2268,85 @@ func TestBuildGraphReportsAFailureThatBuiltNothing(t *testing.T) {
 	}
 }
 
+// Every round resends the whole conversation, so a heavy tool result -- a
+// test run's full JSON, a fetched page body -- is paid for again on every
+// later round and crowds the model's context. Only the newest one is worth
+// keeping; the older ones are replaced by a line saying so.
+func TestBuildGraphDropsStaleHeavyToolResults(t *testing.T) {
+	marker := "MARKER_" + strings.Repeat("x", 600)
+	bodies := scriptedGemini(t, []string{callTestRun, callTestRun, text("Done."), text("Done.")})
+	runs := 0
+	_, err := BuildGraph(context.Background(), BuildRequest{
+		APIKey: "k", Message: "build it", Graph: wiredAgentGraph(), TimeBudget: 20 * time.Second,
+		TestRun: func(ctx context.Context, g models.WorkflowGraph, input string) DryRunResult {
+			runs++
+			return DryRunResult{FinalOutput: marker}
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if runs < 2 {
+		t.Fatalf("setup: want two test runs, got %d", runs)
+	}
+	last := (*bodies)[len(*bodies)-1]
+	if n := strings.Count(last, marker); n > 1 {
+		t.Fatalf("only the newest test run result should still be in the conversation, found %d copies", n)
+	}
+	if !strings.Contains(last, "left out to keep this conversation short") {
+		t.Fatal("the superseded result should be replaced by a short placeholder")
+	}
+}
+
+// The fixed cost of every round: the instructions and the tool declarations
+// are resent on each model call, so growth here is paid for on every round of
+// every build. The ceilings sit a little above the sizes at the last measured
+// baseline; crossing one means the growth was deliberate, and the number
+// should move with it.
+func TestBuilderRequestStaysSmall(t *testing.T) {
+	if n := len(buildSystemPrompt); n > 27500 {
+		t.Errorf("system prompt is %d bytes, over the 27500 ceiling", n)
+	}
+	decls, _ := json.Marshal(graphToolDecls())
+	if n := len(decls); n > 17500 {
+		t.Errorf("tool declarations are %d bytes, over the 17500 ceiling", n)
+	}
+}
+
+// Dropping "user supplies" from the catalog section is only safe because the
+// add_node result still names the credentials for the node just added.
+func TestAddNodeResultStillNamesTheCredentials(t *testing.T) {
+	if strings.Contains(catalogPromptSection(), "user supplies:") {
+		t.Error("the catalog section should no longer carry per-template credential lists")
+	}
+	graph := &models.WorkflowGraph{}
+	out, err := applyGraphOp(graph, "add_node", map[string]any{"type": "action", "template": "slack", "name": "Post"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "slackWebhookURL") {
+		t.Fatalf("the add_node result must still name the credential the user supplies, got %q", out)
+	}
+}
+
+// A rejected add_node must say that nothing was created: a live build invented
+// an id for the node it failed to add and wasted two rounds on it.
+func TestRejectedAddNodeSaysNoNodeExists(t *testing.T) {
+	graph := &models.WorkflowGraph{}
+	tester := &testTracker{}
+	resp := runBuildCall(context.Background(), graph, geminiFuncCall{
+		name: "add_node",
+		args: map[string]any{"type": "trigger", "template": "cron"},
+	}, "k", newX402Session(nil), map[string]string{}, map[string]bool{}, newBuilderSchedule(""), tester)
+	out, _ := resp["result"].(string)
+	if !strings.Contains(out, "no node was created") {
+		t.Fatalf("want the result to say nothing was created, got %q", out)
+	}
+	if len(graph.Nodes) != 0 {
+		t.Fatalf("setup: no node should exist, got %+v", graph.Nodes)
+	}
+}
+
 func TestWithAnswerGuardIncludesDegradedClause(t *testing.T) {
 	tests := []struct {
 		name   string
@@ -2534,6 +2600,127 @@ func TestThePartialTrailerIsStrippedFromReplayedHistory(t *testing.T) {
 	}
 }
 
+// Review finding: pruning ran on the turn just appended, so a batch of
+// research calls lost its tail before the model ever read it -- and the
+// prompt tells the model to batch exactly like this.
+func TestBuildGraphKeepsEveryResultFromTheTurnJustMade(t *testing.T) {
+	batch := `{"candidates":[{"content":{"parts":[` +
+		`{"functionCall":{"name":"describe_node","args":{"type":"action","template":"slack"}}},` +
+		`{"functionCall":{"name":"describe_node","args":{"type":"action","template":"telegram"}}},` +
+		`{"functionCall":{"name":"describe_node","args":{"type":"tool","template":"http"}}},` +
+		`{"functionCall":{"name":"describe_node","args":{"type":"tool","template":"json_extract"}}}` +
+		`]}}]}`
+	bodies := scriptedGemini(t, []string{batch, text("Done."), text("Done.")})
+	if _, err := BuildGraph(context.Background(), BuildRequest{
+		APIKey: "k", Message: "tell me about these", Graph: wiredAgentGraph(), TimeBudget: 20 * time.Second,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	last := (*bodies)[len(*bodies)-1]
+	if strings.Contains(last, "left out to keep this conversation short") {
+		t.Fatal("results the model has not read yet must not be pruned in the same round")
+	}
+	for _, want := range []string{"slackWebhookURL", "telegramBotToken", "jsonPath"} {
+		if !strings.Contains(last, want) {
+			t.Errorf("the batch's describe_node results should all still be there, missing %q", want)
+		}
+	}
+}
+
+// Review finding: with the credential list gone from the catalog, a node
+// whose template is set through update_node left the model with no idea which
+// credential the user has to add.
+func TestUpdateNodeNamesTheCredentialsWhenItSetsATemplate(t *testing.T) {
+	graph := &models.WorkflowGraph{Nodes: []models.WorkflowNode{{ID: "n1", Type: models.NodeTypeAction}}}
+	out, err := applyGraphOp(graph, "update_node", map[string]any{"id": "n1", "template": "slack"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "slackWebhookURL") {
+		t.Fatalf("setting a template must name the credential the user supplies, got %q", out)
+	}
+}
+
+// Review finding: the "no node was created" line was appended to every
+// add_node rejection, including the ones that point at a node that does
+// exist and say to use update_node. The two instructions contradict.
+func TestAddNodeRejectionsThatPointAtAnExistingNode(t *testing.T) {
+	graph := &models.WorkflowGraph{}
+	tester := &testTracker{}
+	args := map[string]any{"type": "trigger", "template": "manual", "name": "Start"}
+	if _, err := applyGraphOp(graph, "add_node", args); err != nil {
+		t.Fatal(err)
+	}
+	resp := runBuildCall(context.Background(), graph, geminiFuncCall{name: "add_node", args: args},
+		"k", newX402Session(nil), map[string]string{}, map[string]bool{}, newBuilderSchedule(""), tester)
+	out, _ := resp["result"].(string)
+	if !strings.Contains(out, "update_node") {
+		t.Fatalf("setup: want the duplicate rejection, got %q", out)
+	}
+	if strings.Contains(out, "no node was created") {
+		t.Fatalf("this rejection names a node that does exist; it must not say nothing was created: %q", out)
+	}
+}
+
+// Review finding: the url probe refuses before the shared error path, so the
+// commonest rejected add_node never got the new wording.
+func TestRefusedURLProbeSaysNoNodeExists(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer srv.Close()
+	SetURLValidatorForTest(func(string) error { return nil })
+	defer SetURLValidatorForTest(func(string) error { return nil })
+
+	graph := &models.WorkflowGraph{}
+	tester := &testTracker{}
+	resp := runBuildCall(context.Background(), graph, geminiFuncCall{
+		name: "add_node",
+		args: map[string]any{"type": "tool", "template": "http", "fields": map[string]any{"url": srv.URL + "/missing"}},
+	}, "k", newX402Session(nil), map[string]string{}, map[string]bool{}, newBuilderSchedule(""), tester)
+	out, _ := resp["result"].(string)
+	if !strings.Contains(out, "no node was created") {
+		t.Fatalf("a refused url leaves no node either, got %q", out)
+	}
+	if len(graph.Nodes) != 0 {
+		t.Fatalf("setup: no node should exist, got %+v", graph.Nodes)
+	}
+}
+
+// Review finding: the prompt still described a "user supplies" clause the
+// catalog no longer prints.
+func TestPromptDoesNotDescribeAClauseItNoLongerPrints(t *testing.T) {
+	if strings.Contains(buildSystemPrompt, `Keys under "user supplies"`) {
+		t.Error("the prompt explains a catalog clause that is no longer emitted")
+	}
+}
+
+// Review finding: two of the kept example keys have no placeholder at all, so
+// keeping them did nothing, while dtOffset and graphqlVariables have real
+// ones and were dropped.
+func TestExampleConfigKeysAllHavePlaceholders(t *testing.T) {
+	placeholders := map[string]string{}
+	for _, ty := range NodeCatalogData().Types {
+		for _, tpl := range ty.Templates {
+			for _, f := range tpl.Fields {
+				if f.Where == "config" {
+					placeholders[f.Key] = f.Placeholder
+				}
+			}
+		}
+	}
+	for k := range exampleConfigKeys {
+		if placeholders[k] == "" {
+			t.Errorf("%q is kept for its example but has no placeholder", k)
+		}
+	}
+	for _, k := range []string{"dtOffset", "graphqlVariables"} {
+		if !exampleConfigKeys[k] {
+			t.Errorf("%q has a placeholder that prevents a run-time failure and should keep it", k)
+		}
+	}
+}
+
 // A real build called add_node with type="http" and type="json_extract",
 // putting a template name where the type goes. The old error listed the ten
 // valid types and never said which one owns "http", so the model guessed --
@@ -2591,5 +2778,329 @@ func TestBuildTimeBudgetLeavesRoomForARealBuild(t *testing.T) {
 	usable := defaultBuildTimeBudget * 3 / 4
 	if usable < 150*time.Second {
 		t.Errorf("a build really gets %s (three quarters of %s); a dozen rounds at ~6s each needs at least 150s", usable, defaultBuildTimeBudget)
+	}
+}
+
+// Production failure (2026-09-14): a build that had already added nodes and
+// edges returned 502 and saved nothing, because one bad model response ends
+// the whole loop. Nine good steps were thrown away. A model call that fails
+// must leave the user with what was built, exactly as running out of time
+// does.
+func TestBuildGraphKeepsWhatItBuiltWhenTheModelCallFails(t *testing.T) {
+	calls := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		if calls == 1 {
+			w.Header().Set("Content-Type", "application/json")
+			io.WriteString(w, `{"candidates":[{"content":{"parts":[{"functionCall":{"name":"add_node","args":{"type":"trigger","template":"manual","name":"Daily Weather Check"}}}]}}]}`)
+			return
+		}
+		w.WriteHeader(http.StatusInternalServerError)
+		io.WriteString(w, `{"error":{"message":"backend overloaded"}}`)
+	}))
+	defer srv.Close()
+	SetGeminiBaseURL(srv.URL)
+	defer SetGeminiBaseURL("https://generativelanguage.googleapis.com")
+
+	res, err := BuildGraph(context.Background(), BuildRequest{APIKey: "k", Message: "daily weather to telegram", Graph: models.WorkflowGraph{}})
+	if err != nil {
+		t.Fatalf("a failed model call must not discard the build: %v", err)
+	}
+	if len(res.Graph.Nodes) != 1 {
+		t.Fatalf("want the node it added kept, got %+v", res.Graph.Nodes)
+	}
+	if res.Reply == "" {
+		t.Fatal("an unfinished build still needs a reply saying so")
+	}
+	if strings.Contains(res.Reply, "backend overloaded") {
+		t.Fatalf("the upstream body must not reach the user: %q", res.Reply)
+	}
+}
+
+// The other fatal branch: Gemini answers with neither a tool call nor text
+// (a malformed function call, a safety stop). Same rule -- keep the work.
+func TestBuildGraphKeepsWhatItBuiltWhenTheModelAnswersWithNothing(t *testing.T) {
+	calls := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		w.Header().Set("Content-Type", "application/json")
+		if calls == 1 {
+			io.WriteString(w, `{"candidates":[{"content":{"parts":[{"functionCall":{"name":"add_node","args":{"type":"trigger","template":"manual","name":"Daily Weather Check"}}}]}}]}`)
+			return
+		}
+		io.WriteString(w, `{"candidates":[{"finishReason":"MALFORMED_FUNCTION_CALL","content":{"role":"model"}}]}`)
+	}))
+	defer srv.Close()
+	SetGeminiBaseURL(srv.URL)
+	defer SetGeminiBaseURL("https://generativelanguage.googleapis.com")
+
+	res, err := BuildGraph(context.Background(), BuildRequest{APIKey: "k", Message: "daily weather to telegram", Graph: models.WorkflowGraph{}})
+	if err != nil {
+		t.Fatalf("an empty model answer must not discard the build: %v", err)
+	}
+	if len(res.Graph.Nodes) != 1 || res.Reply == "" {
+		t.Fatalf("want the build kept with a reply, got %d nodes, reply %q", len(res.Graph.Nodes), res.Reply)
+	}
+}
+
+// A transient 429 is worth one more try before giving up: the build has
+// already spent real time and the next call usually succeeds.
+func TestBuildGraphRetriesATransientModelError(t *testing.T) {
+	calls := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		w.Header().Set("Content-Type", "application/json")
+		switch calls {
+		case 1:
+			w.WriteHeader(http.StatusTooManyRequests)
+			io.WriteString(w, `{"error":{"message":"rate limited"}}`)
+		default:
+			io.WriteString(w, `{"candidates":[{"content":{"parts":[{"text":"Built it."}]}}]}`)
+		}
+	}))
+	defer srv.Close()
+	SetGeminiBaseURL(srv.URL)
+	defer SetGeminiBaseURL("https://generativelanguage.googleapis.com")
+
+	res, err := BuildGraph(context.Background(), BuildRequest{APIKey: "k", Message: "hi", Graph: models.WorkflowGraph{}, TimeBudget: 10 * time.Second})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if calls < 2 {
+		t.Fatalf("want a retry after a 429, got %d calls", calls)
+	}
+	if res.Reply != "Built it." {
+		t.Fatalf("want the reply from the successful retry, got %q", res.Reply)
+	}
+}
+
+// Review finding: only "LLM API <status>" errors were retried, so the most
+// common failure -- the connection dropping -- got no retry at all.
+func TestBuildGraphRetriesADroppedConnection(t *testing.T) {
+	calls := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		if calls == 2 {
+			// Drop the connection mid-request: the client sees EOF, not a status.
+			hj, ok := w.(http.Hijacker)
+			if !ok {
+				t.Error("test server cannot hijack")
+				return
+			}
+			conn, _, err := hj.Hijack()
+			if err != nil {
+				t.Errorf("hijack: %v", err)
+				return
+			}
+			conn.Close()
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		if calls == 1 {
+			io.WriteString(w, `{"candidates":[{"content":{"parts":[{"functionCall":{"name":"add_node","args":{"type":"trigger","template":"manual","name":"Start"}}}]}}]}`)
+			return
+		}
+		io.WriteString(w, text("Built it."))
+	}))
+	defer srv.Close()
+	SetGeminiBaseURL(srv.URL)
+	defer SetGeminiBaseURL("https://generativelanguage.googleapis.com")
+
+	res, err := BuildGraph(context.Background(), BuildRequest{APIKey: "k", Message: "hi", Graph: models.WorkflowGraph{}, TimeBudget: 10 * time.Second})
+	if err != nil {
+		t.Fatalf("a dropped connection must be retried, not fatal: %v", err)
+	}
+	if calls < 3 {
+		t.Fatalf("want a retry after the dropped connection, got %d calls", calls)
+	}
+	if res.Reply != "Built it." {
+		t.Fatalf("want the reply from the successful retry, got %q", res.Reply)
+	}
+}
+
+// Review finding: when the audit repair round is what failed, the model's
+// earlier reply was returned unchanged -- so a graph with known unfixed
+// problems was reported to the user as finished.
+func TestBuildGraphDoesNotClaimSuccessWhenTheRepairRoundFails(t *testing.T) {
+	calls := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		w.Header().Set("Content-Type", "application/json")
+		switch calls {
+		case 1:
+			// One unconnected node: the audit will want it repaired.
+			io.WriteString(w, `{"candidates":[{"content":{"parts":[{"functionCall":{"name":"add_node","args":{"type":"trigger","template":"manual","name":"Start"}}}]}}]}`)
+		case 2:
+			io.WriteString(w, text("All done, your workflow is ready."))
+		default:
+			w.WriteHeader(http.StatusInternalServerError)
+			io.WriteString(w, `{"error":{"message":"overloaded"}}`)
+		}
+	}))
+	defer srv.Close()
+	SetGeminiBaseURL(srv.URL)
+	defer SetGeminiBaseURL("https://generativelanguage.googleapis.com")
+
+	res, err := BuildGraph(context.Background(), BuildRequest{APIKey: "k", Message: "build it", Graph: models.WorkflowGraph{}, TimeBudget: 10 * time.Second})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if res.Reply == "All done, your workflow is ready." {
+		t.Fatal("the repair round failed, so the reply must not claim the workflow is finished")
+	}
+}
+
+// Review finding: a revoked key or exhausted quota should still say which it
+// was, rather than a flat "could not be reached" for every failure.
+func TestBuildGraphNamesAQuotaFailure(t *testing.T) {
+	calls := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		w.Header().Set("Content-Type", "application/json")
+		if calls == 1 {
+			io.WriteString(w, `{"candidates":[{"content":{"parts":[{"functionCall":{"name":"add_node","args":{"type":"trigger","template":"manual","name":"Start"}}}]}}]}`)
+			return
+		}
+		w.WriteHeader(http.StatusTooManyRequests)
+		io.WriteString(w, `{"error":{"message":"quota exceeded"}}`)
+	}))
+	defer srv.Close()
+	SetGeminiBaseURL(srv.URL)
+	defer SetGeminiBaseURL("https://generativelanguage.googleapis.com")
+
+	res, err := BuildGraph(context.Background(), BuildRequest{APIKey: "k", Message: "hi", Graph: models.WorkflowGraph{}, TimeBudget: 10 * time.Second})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(res.Reply, "busy") && !strings.Contains(res.Reply, "rate") {
+		t.Fatalf("want a reply naming the rate limit, got %q", res.Reply)
+	}
+	if strings.Contains(res.Reply, "quota exceeded") {
+		t.Fatalf("the upstream body must not reach the user: %q", res.Reply)
+	}
+}
+
+// The invariant this commit relies on: with nothing built there is nothing to
+// save, so the request must still fail and surface the real error.
+func TestBuildGraphStillFailsWhenItBuiltNothing(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+		io.WriteString(w, `{"error":{"message":"overloaded"}}`)
+	}))
+	defer srv.Close()
+	SetGeminiBaseURL(srv.URL)
+	defer SetGeminiBaseURL("https://generativelanguage.googleapis.com")
+
+	if _, err := BuildGraph(context.Background(), BuildRequest{APIKey: "k", Message: "hi", Graph: models.WorkflowGraph{}, TimeBudget: 10 * time.Second}); err == nil {
+		t.Fatal("a build that produced nothing must report the failure")
+	}
+}
+
+func TestModelFailureReasonNamesTheKindNotTheBody(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+		want string
+	}{
+		{"rate limit", fmt.Errorf("LLM API 429: quota exceeded for key sk-secret"), "rate limit"},
+		{"credentials refused", fmt.Errorf("LLM API 403: API key not valid"), "refused this platform's credentials"},
+		{"credentials missing", fmt.Errorf("LLM API 401: missing key"), "refused this platform's credentials"},
+		{"service trouble", fmt.Errorf("LLM API 503: overloaded"), "having trouble"},
+		{"rejected request", fmt.Errorf("LLM API 400: bad payload"), "rejected the request"},
+		{"transport failure", io.ErrUnexpectedEOF, "could not be reached"},
+		{"no answer", fmt.Errorf("%w (cut off)", ErrNoModelText), "stopped without an answer"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := modelFailureReason(tt.err)
+			if !strings.Contains(got, tt.want) {
+				t.Errorf("modelFailureReason(%v) = %q, want it to contain %q", tt.err, got, tt.want)
+			}
+			if strings.Contains(got, "sk-secret") || strings.Contains(got, "quota exceeded") {
+				t.Errorf("the upstream body leaked into %q", got)
+			}
+		})
+	}
+}
+
+func TestCoinIDRefusalSaysNoNodeWasCreated(t *testing.T) {
+	graph := &models.WorkflowGraph{}
+	resp := runBuildCall(context.Background(), graph, geminiFuncCall{
+		name: "add_node",
+		args: map[string]any{"type": "action", "template": "coingecko", "config": map[string]any{"cgIDs": "myriad"}},
+	}, "k", newX402Session(nil), map[string]string{}, map[string]bool{}, newBuilderSchedule(""), &testTracker{})
+	out, _ := resp["result"].(string)
+	if !strings.Contains(out, "never looked up") {
+		t.Fatalf("setup: want the coin id refusal, got %q", out)
+	}
+	if !strings.Contains(out, "no node was created") {
+		t.Fatalf("a refused add_node created nothing and must say so, got %q", out)
+	}
+	if len(graph.Nodes) != 0 {
+		t.Fatalf("setup: no node should exist, got %+v", graph.Nodes)
+	}
+}
+
+// Gemini rejects a request in which a functionCall has no matching
+// functionResponse, so pruning must blank payloads and never drop a part.
+func TestPruningKeepsEveryFunctionCallPaired(t *testing.T) {
+	batch := `{"candidates":[{"content":{"parts":[` +
+		`{"functionCall":{"name":"describe_node","args":{"type":"action","template":"slack"}}},` +
+		`{"functionCall":{"name":"describe_node","args":{"type":"action","template":"telegram"}}},` +
+		`{"functionCall":{"name":"describe_node","args":{"type":"tool","template":"http"}}}` +
+		`]}}]}`
+	bodies := scriptedGemini(t, []string{batch, batch, batch, text("Done."), text("Done.")})
+	if _, err := BuildGraph(context.Background(), BuildRequest{
+		APIKey: "k", Message: "tell me about these", Graph: wiredAgentGraph(), TimeBudget: 20 * time.Second,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	last := (*bodies)[len(*bodies)-1]
+	if !strings.Contains(last, "left out to keep this conversation short") {
+		t.Fatal("setup: three rounds of describe_node should have pruned the oldest results")
+	}
+	var req struct {
+		Contents []struct {
+			Role  string `json:"role"`
+			Parts []struct {
+				FunctionCall *struct {
+					Name string `json:"name"`
+				} `json:"functionCall"`
+				FunctionResponse *struct {
+					Name string `json:"name"`
+				} `json:"functionResponse"`
+			} `json:"parts"`
+		} `json:"contents"`
+	}
+	if err := json.Unmarshal([]byte(last), &req); err != nil {
+		t.Fatal(err)
+	}
+	pairs := 0
+	for i, c := range req.Contents {
+		var calls []string
+		for _, p := range c.Parts {
+			if p.FunctionCall != nil {
+				calls = append(calls, p.FunctionCall.Name)
+			}
+		}
+		if len(calls) == 0 {
+			continue
+		}
+		if i+1 >= len(req.Contents) {
+			t.Fatalf("turn %d has function calls and no turn after it", i)
+		}
+		var resps []string
+		for _, p := range req.Contents[i+1].Parts {
+			if p.FunctionResponse != nil {
+				resps = append(resps, p.FunctionResponse.Name)
+			}
+		}
+		if strings.Join(calls, ",") != strings.Join(resps, ",") {
+			t.Fatalf("turn %d called %v but the next turn answers %v", i, calls, resps)
+		}
+		pairs++
+	}
+	if pairs < 3 {
+		t.Fatalf("setup: expected at least 3 call/response turns, got %d", pairs)
 	}
 }

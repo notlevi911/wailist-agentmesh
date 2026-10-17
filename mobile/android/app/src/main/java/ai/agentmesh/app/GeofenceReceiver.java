@@ -119,6 +119,8 @@ public class GeofenceReceiver extends BroadcastReceiver {
     private void append(Context context, String workflowId, Location location) {
         SharedPreferences prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE);
         synchronized (LOCK) {
+            // Ignore a transition already in flight when account deletion disarmed its fence.
+            if (GeofenceStore.loadAll(context).stream().noneMatch(fence -> fence.id.equals(workflowId))) return;
             // A corrupt backlog must not cost the crossing that just happened --
             // that would lose the one event this whole receiver exists for, to
             // protect a backlog that is already lost anyway. Falling back to an

@@ -25,6 +25,7 @@ import { fixtureWorkflow } from "./workflowFixtures";
 import { assertWritable } from "./readonly";
 import { IS_NATIVE, authHeaders } from "./nativeAuth";
 import type { PaymentMethod } from "@/components/checkout/types";
+import type { RunCosts } from "./runCosts";
 
 // In the browser, always route through /api so the cookie stays same-site.
 // NEXT_PUBLIC_API_URL still controls mock vs real (empty = mock data).
@@ -87,6 +88,9 @@ export interface AuthUser {
   // True for an OAuth account that has never set a name/org — Google and
   // GitHub only hand back a verified email, not an organization.
   needsOnboarding: boolean;
+  hasPassword?: boolean;
+  createdAt?: string;
+  lowBalanceUsdMicros?: number;
 }
 
 // Thrown by auth.me() when the server answered without confirming a session.
@@ -167,6 +171,7 @@ export const auth = {
       name: "Dev",
       orgName: "Acme Capital",
       needsOnboarding: false,
+      hasPassword: false,
     };
   },
 
@@ -194,6 +199,19 @@ export const auth = {
     };
   },
 
+  changePassword: async (currentPassword: string, newPassword: string): Promise<void> => {
+    if (!BASE) throw new Error("Password changes require a connected backend.");
+    const res = await apiFetch(`${BASE}/auth/password`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ currentPassword, newPassword }),
+    });
+    if (res.status !== 204) {
+      const data = await res.json().catch(() => ({}));
+      throw new Error(data.error ?? "Could not change password.");
+    }
+  },
+
   signOut: async (): Promise<void> => {
     if (BASE) {
       await apiFetch(`${BASE}/auth/signout`, {
@@ -203,6 +221,19 @@ export const auth = {
       return;
     }
     await delay(100);
+  },
+
+  deleteAccount: async (confirmation: string, password: string): Promise<void> => {
+    if (!BASE) throw new Error("Account deletion requires a connected backend.");
+    const res = await apiFetch(`${BASE}/auth/me`, {
+      method: "DELETE",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ confirmation, password }),
+    });
+    if (res.status !== 204) {
+      const data = await res.json().catch(() => ({}));
+      throw new Error(data.error ?? "Could not delete account. Try again.");
+    }
   },
 
   // Full URL to kick off a backend OAuth flow. Empty string when no backend
@@ -243,6 +274,40 @@ export const auth = {
 };
 
 // -- Workflows ------------------------------------------------------------
+export interface UserSettings {
+  lowBalanceUsdMicros: number;
+  maxCallSpendUsdMicros: number | null;
+  limits: {
+    minCallSpendUsdMicros: number;
+    maxCallSpendUsdMicros: number;
+    maxLowBalanceUsdMicros: number;
+  };
+}
+
+export type UserSettingsPatch = Partial<Pick<UserSettings, "lowBalanceUsdMicros" | "maxCallSpendUsdMicros">>;
+
+export const settings = {
+  get: async (): Promise<UserSettings> => {
+    if (!BASE) throw new Error("Settings require a connected backend.");
+    const res = await apiFetch(`${BASE}/settings`);
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error ?? "Could not load settings.");
+    return data;
+  },
+  update: async (patch: UserSettingsPatch): Promise<UserSettings> => {
+    assertWritable("PATCH", "/settings");
+    if (!BASE) throw new Error("Settings require a connected backend.");
+    const res = await apiFetch(`${BASE}/settings`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(patch),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error ?? "Could not save settings.");
+    return data;
+  },
+};
+
 export const workflows = {
   // TODO: GET /workflows
   list: async (): Promise<Workflow[]> => {
@@ -433,7 +498,7 @@ export const workflows = {
     const current = await workflows.get(id);
     return {
       reply:
-        "Mock build response — connect a real backend to build workflows from chat.",
+        "Mock build response: connect a real backend to build workflows from chat.",
       workflow: current,
     };
   },
@@ -893,6 +958,9 @@ export const runs = {
     run: RunDetail;
     logs: RunLogRecord[];
     deadLetters: DeadLetterRun[];
+    // What the run was charged, from the debit ledger (#111). Optional: a
+    // backend older than that change does not send it.
+    costs?: RunCosts;
   }> => {
     if (BASE) {
       const res = await apiFetch(`${BASE}/runs/${runId}`, {
@@ -930,6 +998,19 @@ export const runs = {
         spendUsdMicros: 65_000,
       },
       deadLetters: [],
+      // The paid weather call below, as the ledger would record it: the
+      // $0.065 relay cost plus the fixed $1.50 x402 platform fee, so the
+      // hover exercises the multi-kind breakdown rather than a single charge.
+      costs: {
+        totalUsdMicros: 1_565_000,
+        steps: [
+          {
+            nodeId: "n4",
+            totalUsdMicros: 1_565_000,
+            byKind: { x402_relay_cost: 65_000, x402_platform_fee: 1_500_000 },
+          },
+        ],
+      },
       logs: [
         {
           id: "rl-1",
@@ -964,7 +1045,7 @@ export const runs = {
           output: {
             message:
               "It's 14.2°C in San Francisco right now and partly cloudy, with " +
-              "winds around 18 km/h. Mild, but the wind makes it feel cooler — " +
+              "winds around 18 km/h. Mild, but the wind makes it feel cooler: " +
               "worth a light jacket if you're heading out.",
             x402Payments: [{ txId: mockTxId, amount: "0.065" }],
           },
@@ -1133,45 +1214,25 @@ export const oauth2 = {
   connectURL: (provider: string): string => `${BASE}/oauth2/${provider}/start`,
 
   listCredentials: async (
-    provider: string,
+    provider?: string,
   ): Promise<OAuthCredentialSummary[]> => {
     if (!BASE) return []; // No connected-account concept in mock mode.
     const res = await apiFetch(
-      `${BASE}/oauth2/credentials?provider=${encodeURIComponent(provider)}`,
+      `${BASE}/oauth2/credentials${provider ? `?provider=${encodeURIComponent(provider)}` : ""}`,
       { credentials: "include" },
     );
-    if (!res.ok) return [];
-    return res.json().catch(() => []);
+    if (!res.ok) throw new Error("Could not load connected accounts.");
+    return res.json();
   },
 
   deleteCredential: async (id: string): Promise<void> => {
-    if (!BASE) return;
-    await apiFetch(`${BASE}/oauth2/credentials/${encodeURIComponent(id)}`, {
+    assertWritable("DELETE", `/oauth2/credentials/${encodeURIComponent(id)}`);
+    if (!BASE) throw new Error("Disconnecting requires a connected backend.");
+    const res = await apiFetch(`${BASE}/oauth2/credentials/${encodeURIComponent(id)}`, {
       method: "DELETE",
       credentials: "include",
     });
-  },
-};
-
-// -- Waitlist -------------------------------------------------------------
-export const waitlist = {
-  // TODO: POST /waitlist
-  join: async (email: string): Promise<void> => {
-    if (BASE) {
-      // Plain fetch, not apiFetch: this is the one genuinely public endpoint
-      // here, and it must not send credentials. A credentialed cross-origin
-      // request fails outright when CORS_ORIGIN is unset (the wildcard case,
-      // where the server cannot send Allow-Credentials), which would break the
-      // landing page's signup for a deployment where nothing else is wrong.
-      await fetch(`${BASE}/waitlist`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email }),
-      });
-      return;
-    }
-    void email;
-    await delay(600);
+    if (res.status !== 204) throw new Error("Could not disconnect this account. Try again.");
   },
 };
 

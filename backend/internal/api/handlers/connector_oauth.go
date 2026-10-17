@@ -303,8 +303,8 @@ func (d *Deps) registerConnectorProviders() map[string]ConnectorOAuthConfig {
 	//
 	// This app is registered against gitlab.com itself, so the resulting
 	// token is only ever valid there; self-hosted GitLab OAuth-linking is out
-	// of scope for this task (see gitlabOAuthAPIBase's doc comment in
-	// connectors_devtools.go's sendGitLab — the OAuth branch there hardcodes
+	// of scope for this task (see SetGitLabOAuthAPIBaseForTest's doc comment in
+	// connectors_devtools.go, above sendGitLab — the OAuth branch there hardcodes
 	// gitlab.com and never reads the node's configurable gitlabBaseURL).
 	//
 	// KNOWN GAP: GitLab OAuth access tokens expire after ~2 hours and the

@@ -14,14 +14,23 @@ import (
 func TestRecordRunFundingThenRunFundedSettlement(t *testing.T) {
 	store := testStore(t)
 	ctx := context.Background()
-
-	inboundTxID := fmt.Sprintf("RUNFUND-TX-%d", time.Now().UnixNano())
-	funding, err := store.RecordRunFunding(ctx, "run-123", inboundTxID, 500000)
+	wf, err := store.CreateWorkflow(ctx, "Funding", "dev")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if funding.RunID != "run-123" {
-		t.Fatalf("want run-123, got %s", funding.RunID)
+	t.Cleanup(func() { store.DeleteWorkflow(context.Background(), wf.ID) })
+	run, err := store.CreateRun(ctx, wf.ID, "test", []byte("{}"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	inboundTxID := fmt.Sprintf("RUNFUND-TX-%d", time.Now().UnixNano())
+	funding, err := store.RecordRunFunding(ctx, run.ID, inboundTxID, 500000)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if funding.RunID != run.ID {
+		t.Fatalf("want %s, got %s", run.ID, funding.RunID)
 	}
 	if funding.InboundTxID != inboundTxID {
 		t.Fatalf("want %s, got %s", inboundTxID, funding.InboundTxID)

@@ -478,8 +478,8 @@ export function AuthPage({ initialMode = "signin" }: AuthPageProps) {
             justifyContent: "space-between",
           }}
         >
-          <span>· enterprise SSO available</span>
-          <span>SOC 2 Type I · in progress</span>
+          <span>Google and GitHub sign-in</span>
+          <span>Email sign-in</span>
         </div>
       </div>
 
@@ -513,15 +513,15 @@ function AuthVisual() {
     },
     {
       kicker: "x402 tool",
-      name: "AlpacaQuote",
-      sub: "0.001 ALGO / quote",
+      name: "Quote API",
+      sub: "Pay per request",
       tone: "magenta",
       delay: "0.15s",
     },
     {
       kicker: "provider",
       name: "Google Gemini",
-      sub: "1.5 Pro",
+      sub: "Gemini 2.5 Flash",
       tone: "default",
       delay: "0.30s",
     },
@@ -601,7 +601,7 @@ function AuthVisual() {
       </div>
 
       <div className="reveal reveal-delay-3" style={{ maxWidth: 480 }}>
-        <Tag>build · fund · wire · run</Tag>
+        <Tag>Example workflow</Tag>
         <div
           style={{
             marginTop: 14,
@@ -611,10 +611,10 @@ function AuthVisual() {
             lineHeight: 1.15,
           }}
         >
-          Wallets come at deploy.
+          Build workflows visually.
           <span style={{ color: "var(--accent)" }}>
             {" "}
-            Spend is accountable, per agent.
+            Track each run and its cost.
           </span>
         </div>
         <div
@@ -625,7 +625,7 @@ function AuthVisual() {
             color: "var(--fg-dim)",
           }}
         >
-          x402 micropayments · A2A receipts on-chain
+          x402 API tools · live run logs
         </div>
       </div>
     </div>

@@ -11,49 +11,8 @@ import (
 	"github.com/agentmesh/backend/internal/models"
 )
 
-// apiBaseDefaults holds each connector's real API base URL, keyed by
-// service name -- "" for Shopify, whose base is built per-node from
-// user-supplied shop config rather than a fixed host. apiBases holds the
-// current (possibly test-overridden) value, seeded from the defaults.
-// Together with apiBase/setAPIBaseForTest below, this replaces what would
-// otherwise be a hand-written var + SetXAPIBaseForTest pair per connector.
-//
-// Twilio, Stripe, PagerDuty, and Zendesk are deliberately absent: this PR
-// and master's independently added connectors for all four, and the
-// versions in connectors_ops.go/connectors_commerce.go (with their own
-// local *APIBase vars) were kept as canonical on reconciliation -- see
-// those files instead.
-var apiBaseDefaults = map[string]string{
-	"intercom":    "https://api.intercom.io",
-	"openweather": "https://api.openweathermap.org",
-	"calendly":    "https://api.calendly.com",
-	"shopify":     "",
-	"baserow":     "https://api.baserow.io",
-}
-
-var apiBases = cloneAPIBaseDefaults()
-
-func cloneAPIBaseDefaults() map[string]string {
-	m := make(map[string]string, len(apiBaseDefaults))
-	for k, v := range apiBaseDefaults {
-		m[k] = v
-	}
-	return m
-}
-
-// apiBase returns service's current API base URL (real, or test-overridden).
-func apiBase(service string) string {
-	return apiBases[service]
-}
-
-// setAPIBaseForTest overrides service's API base URL, resetting to its real
-// default when base is "". Backs every SetXAPIBaseForTest export below.
-func setAPIBaseForTest(service, base string) {
-	if base == "" {
-		base = apiBaseDefaults[service]
-	}
-	apiBases[service] = base
-}
+// Every connector's API base URL, and the setAPIBaseForTest these exports
+// wrap, lives in connector_helpers.go's apiBaseDefaults registry.
 
 // SetIntercomAPIBaseForTest overrides the Intercom API base URL. Call only
 // from tests. Pass "" to reset to the real API.

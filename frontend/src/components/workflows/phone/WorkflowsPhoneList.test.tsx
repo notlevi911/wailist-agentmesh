@@ -28,9 +28,9 @@ const LIST = [
 ];
 
 const rowNames = () =>
-  screen
-    .getAllByRole("link")
-    .map((a) => a.querySelector(".wfp-card__name")?.textContent);
+  Array.from(
+    document.querySelectorAll<HTMLAnchorElement>(".wfp-card__open"),
+  ).map((a) => a.querySelector(".wfp-card__name")?.textContent);
 
 afterEach(cleanup);
 
@@ -172,6 +172,6 @@ describe("WorkflowsPhoneList", () => {
     const summary = screen.getByLabelText("2 workflows, spend not loaded");
     expect(summary.textContent).toContain("2 total");
     expect(summary.textContent).not.toMatch(/\$0/);
-    expect(summary.textContent).toMatch(/—\s*spent/);
+    expect(summary.textContent).toMatch(/-\s*spent/);
   });
 });

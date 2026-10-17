@@ -3,6 +3,7 @@ package handlers
 import (
 	"encoding/json"
 	"errors"
+	"io"
 	"log"
 	"net/http"
 	"os"
@@ -29,12 +30,20 @@ const authCookieName = "agentmesh_token"
 const uiCookieName = "agentmesh_ui"
 
 func (d *Deps) setUICookie(w http.ResponseWriter) {
+	d.writeUICookie(w, "1", int(tokenTTL.Seconds()))
+}
+
+func (d *Deps) clearUICookie(w http.ResponseWriter) {
+	d.writeUICookie(w, "", -1)
+}
+
+func (d *Deps) writeUICookie(w http.ResponseWriter, value string, maxAge int) {
 	secure := strings.HasPrefix(os.Getenv("BASE_URL"), "https")
 	http.SetCookie(w, &http.Cookie{
 		Name:     uiCookieName,
-		Value:    "1",
+		Value:    value,
 		Path:     "/",
-		MaxAge:   int(tokenTTL.Seconds()),
+		MaxAge:   maxAge,
 		HttpOnly: false,
 		Secure:   secure,
 		SameSite: http.SameSiteLaxMode,
@@ -124,6 +133,7 @@ func (d *Deps) clearAuthCookie(w http.ResponseWriter) {
 var dummyHash, _ = bcrypt.GenerateFromPassword([]byte("dummy-password-agentmesh"), bcrypt.DefaultCost)
 
 const tokenTTL = 7 * 24 * time.Hour
+const maxPasswordBytes = 72
 
 type authClaims struct {
 	UserID string `json:"sub"`
@@ -138,7 +148,10 @@ func (d *Deps) SignUp(w http.ResponseWriter, r *http.Request) {
 		Name     string `json:"name"`
 		Org      string `json:"org"`
 	}
-	json.NewDecoder(r.Body).Decode(&body)
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		respond.Error(w, http.StatusBadRequest, "malformed request body")
+		return
+	}
 
 	body.Email = strings.TrimSpace(strings.ToLower(body.Email))
 	body.Name = strings.TrimSpace(body.Name)
@@ -149,6 +162,10 @@ func (d *Deps) SignUp(w http.ResponseWriter, r *http.Request) {
 	}
 	if len(body.Password) < 8 {
 		respond.Error(w, http.StatusBadRequest, "password must be at least 8 characters")
+		return
+	}
+	if len(body.Password) > maxPasswordBytes {
+		respond.Error(w, http.StatusBadRequest, "password must be at most 72 bytes")
 		return
 	}
 	if body.Name == "" {
@@ -197,7 +214,10 @@ func (d *Deps) SignIn(w http.ResponseWriter, r *http.Request) {
 		Email    string `json:"email"`
 		Password string `json:"password"`
 	}
-	json.NewDecoder(r.Body).Decode(&body)
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		respond.Error(w, http.StatusBadRequest, "malformed request body")
+		return
+	}
 
 	body.Email = strings.TrimSpace(strings.ToLower(body.Email))
 	if body.Email == "" || body.Password == "" {
@@ -229,6 +249,29 @@ func (d *Deps) SignOut(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+func userResponse(user models.User, settings models.UserSettings) map[string]any {
+	return map[string]any{
+		"id":                  user.ID,
+		"email":               user.Email,
+		"name":                user.Name,
+		"orgName":             user.OrgName,
+		"hasPassword":         user.PasswordHash != "",
+		"needsOnboarding":     user.Name == "",
+		"createdAt":           user.CreatedAt,
+		"lowBalanceUsdMicros": settings.LowBalanceUSDMicros,
+	}
+}
+
+func (d *Deps) settingsForProfile(r *http.Request, userID string) models.UserSettings {
+	settings, err := d.Store.GetUserSettings(r.Context(), userID)
+	if err != nil {
+		// A preference read failure must not turn a valid session into a sign-out.
+		log.Printf("profile settings: %v", err)
+		return models.DefaultUserSettings()
+	}
+	return settings
+}
+
 func (d *Deps) Me(w http.ResponseWriter, r *http.Request) {
 	userID, _ := r.Context().Value(CtxUserID).(string)
 	user, err := d.Store.GetUserByID(r.Context(), userID)
@@ -236,15 +279,7 @@ func (d *Deps) Me(w http.ResponseWriter, r *http.Request) {
 		respond.Error(w, http.StatusUnauthorized, "not found")
 		return
 	}
-	respond.JSON(w, http.StatusOK, map[string]any{
-		"id":      user.ID,
-		"email":   user.Email,
-		"name":    user.Name,
-		"orgName": user.OrgName,
-		// OAuth accounts are created with no name — the frontend prompts for
-		// name+org once, right after the provider redirect lands them here.
-		"needsOnboarding": user.Name == "",
-	})
+	respond.JSON(w, http.StatusOK, userResponse(user, d.settingsForProfile(r, userID)))
 }
 
 // UpdateProfile sets the signed-in user's display name and organization
@@ -257,7 +292,10 @@ func (d *Deps) UpdateProfile(w http.ResponseWriter, r *http.Request) {
 		Name    string `json:"name"`
 		OrgName string `json:"orgName"`
 	}
-	json.NewDecoder(r.Body).Decode(&body)
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		respond.Error(w, http.StatusBadRequest, "malformed request body")
+		return
+	}
 	body.Name = strings.TrimSpace(body.Name)
 	body.OrgName = strings.TrimSpace(body.OrgName)
 	if body.Name == "" {
@@ -271,13 +309,59 @@ func (d *Deps) UpdateProfile(w http.ResponseWriter, r *http.Request) {
 		respond.Error(w, http.StatusInternalServerError, "internal error")
 		return
 	}
-	respond.JSON(w, http.StatusOK, map[string]any{
-		"id":              user.ID,
-		"email":           user.Email,
-		"name":            user.Name,
-		"orgName":         user.OrgName,
-		"needsOnboarding": false,
-	})
+	respond.JSON(w, http.StatusOK, userResponse(user, d.settingsForProfile(r, userID)))
+}
+
+func (d *Deps) ChangePassword(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		CurrentPassword string `json:"currentPassword"`
+		NewPassword     string `json:"newPassword"`
+	}
+	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&body); err != nil {
+		respond.Error(w, http.StatusBadRequest, "malformed request body")
+		return
+	}
+	if err := decoder.Decode(new(any)); err != io.EOF {
+		respond.Error(w, http.StatusBadRequest, "malformed request body")
+		return
+	}
+	if len(body.NewPassword) < 8 || len(body.NewPassword) > maxPasswordBytes {
+		respond.Error(w, http.StatusBadRequest, "new password must be between 8 and 72 bytes")
+		return
+	}
+	userID, _ := r.Context().Value(CtxUserID).(string)
+	user, err := d.Store.GetUserByID(r.Context(), userID)
+	if err != nil {
+		respond.Error(w, http.StatusUnauthorized, "account not found")
+		return
+	}
+	if user.PasswordHash == "" {
+		respond.Error(w, http.StatusBadRequest, "this account uses a sign-in provider and has no password to change")
+		return
+	}
+	if bcrypt.CompareHashAndPassword([]byte(user.PasswordHash), []byte(body.CurrentPassword)) != nil {
+		respond.Error(w, http.StatusUnauthorized, "current password is incorrect")
+		return
+	}
+	hash, err := bcrypt.GenerateFromPassword([]byte(body.NewPassword), bcrypt.DefaultCost)
+	if err != nil {
+		log.Printf("hash new password: %v", err)
+		respond.Error(w, http.StatusInternalServerError, "could not change password")
+		return
+	}
+	updated, err := d.Store.UpdatePassword(r.Context(), userID, user.PasswordHash, string(hash))
+	if err != nil {
+		log.Printf("change password: %v", err)
+		respond.Error(w, http.StatusInternalServerError, "could not change password")
+		return
+	}
+	if !updated {
+		respond.Error(w, http.StatusConflict, "password changed elsewhere; check your current password and try again")
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func (d *Deps) issueToken(user models.User) (string, error) {

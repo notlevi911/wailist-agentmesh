@@ -24,6 +24,7 @@ import {
   TOOL_TEMPLATES,
   ACTION_TEMPLATES,
   GOOGLE_TEMPLATES,
+  STATE_TEMPLATES,
   TENDRIL_TEMPLATES,
   END_TEMPLATES,
 } from "./data";
@@ -104,8 +105,8 @@ function fromConnectorTable(id: string): CatalogField[] {
     key: f.key,
     where: f.kind,
     label: f.label,
-    ...(f.hint ? { hint: f.hint } : {}),
-    ...(f.placeholder ? { placeholder: f.placeholder } : {}),
+    ...(f.hint ? { hint: f.catalogHint ?? f.hint } : {}),
+    ...(f.placeholder ? { placeholder: f.catalogPlaceholder ?? f.placeholder } : {}),
   }));
 }
 
@@ -164,13 +165,6 @@ const GOOGLE_ACCOUNT: CatalogField = {
 };
 
 const GOOGLE_FIELDS: Record<string, CatalogField[]> = {
-  gmail_list: [
-    { key: "gmailQuery", where: "config", label: "Query", hint: "Gmail search syntax, e.g. is:unread from:someone@x.com" },
-    { key: "gmailMaxResults", where: "config", label: "Max results", placeholder: "10" },
-  ],
-  gmail_get: [
-    { key: "gmailMessageID", where: "config", label: "Message ID", hint: "e.g. {{ result.id }} from an upstream Gmail: List step" },
-  ],
   gmail_send: [
     { key: "gmailTo", where: "config", label: "To", placeholder: "recipient@example.com" },
     { key: "gmailSubject", where: "config", label: "Subject" },
@@ -196,15 +190,6 @@ const GOOGLE_FIELDS: Record<string, CatalogField[]> = {
     { key: "calendarSummary", where: "config", label: "Title", hint: "leave blank to use the Message field" },
     { key: "calendarStart", where: "config", label: "Start", placeholder: "2026-08-10T10:00:00Z" },
     { key: "calendarEnd", where: "config", label: "End", placeholder: "2026-08-10T11:00:00Z" },
-  ],
-  drive_list: [
-    { key: "driveQuery", where: "config", label: "Query", hint: "Drive search syntax, e.g. name contains 'report'" },
-  ],
-  drive_get: [
-    { key: "driveFileID", where: "config", label: "File ID", hint: "e.g. {{ result.id }} from an upstream Drive: List step" },
-  ],
-  drive_download: [
-    { key: "driveFileID", where: "config", label: "File ID", hint: "e.g. {{ result.id }} from an upstream Drive: List step" },
   ],
 };
 
@@ -251,8 +236,7 @@ const AGENT_NOTES: Record<string, string> = {
 
 /**
  * How every template is classified, keyed "<type>/<id>" because ids repeat
- * across types ("http" is both a tool and an end node, "get" is both a state
- * op and a Drive one).
+ * across types ("http" is both a tool and an end node).
  *
  * tool/http is deliberately in neither set: it is classified at run time by
  * its method, since the same template GETs or POSTs depending on its config.
@@ -306,13 +290,8 @@ const READ_TEMPLATES = new Set<string>([
   "action/coingecko_history",
   // Google reads. gmail_send, gmail_reply, sheets_append and calendar_create
   // are sends and stay actions.
-  "google/gmail_list",
-  "google/gmail_get",
   "google/sheets_read",
   "google/calendar_list",
-  "google/drive_list",
-  "google/drive_get",
-  "google/drive_download",
 ]);
 
 /**
@@ -354,8 +333,8 @@ export function buildNodeCatalog(): NodeCatalog {
       desc: 'An LLM step. Needs a provider attached to its "model" port; tools attach to its "tools" port.',
       templates: AGENT_TEMPLATES.map((t) => ({
         id: t.id,
-        name: t.name,
-        desc: t.desc,
+        name: t.catalogName ?? t.name,
+        desc: t.catalogDesc ?? t.desc,
         kind: kindOf("agent", t.id),
         ...(AGENT_NOTES[t.id] ? { note: AGENT_NOTES[t.id] } : {}),
         fields: [
@@ -400,7 +379,7 @@ export function buildNodeCatalog(): NodeCatalog {
         const oauth = CONNECTOR_CONFIG_FIELDS[t.id]?.oauthProvider;
         return {
           id: t.id,
-          name: t.name,
+          name: t.catalogName ?? t.name,
           desc: t.desc,
           kind: kindOf("action", t.id),
           ...(ACTION_NOTES[t.id] ? { note: ACTION_NOTES[t.id] } : {}),
@@ -412,7 +391,7 @@ export function buildNodeCatalog(): NodeCatalog {
     },
     {
       type: "google",
-      desc: "Gmail, Sheets, Calendar and Drive, through one Google account the user links in the Inspector.",
+      desc: "Gmail sending, Sheets and Calendar, through one Google account the user links in the Inspector.",
       templates: GOOGLE_TEMPLATES.map((t) => ({
         id: t.id,
         name: t.name,
@@ -426,6 +405,25 @@ export function buildNodeCatalog(): NodeCatalog {
       })),
     },
     {
+      type: "state",
+      desc: "Values that persist between runs of this workflow (a cursor, a counter, the last price seen). Read anywhere as {{state.key}}.",
+      templates: STATE_TEMPLATES.map((t) => ({
+        id: t.id,
+        name: t.name,
+        desc: t.desc,
+        kind: kindOf("state", t.id),
+        presets: { stateOp: t.id },
+        fields: [
+          { key: "stateKey", where: "field" as const, label: "Key", hint: "persists across runs", placeholder: "lastRowId" },
+          ...(t.id === "set"
+            ? [{ key: "stateValue", where: "field" as const, label: "Value", hint: "blank stores the previous step's output" }]
+            : t.id === "increment"
+              ? [{ key: "stateValue", where: "field" as const, label: "Amount", hint: "defaults to 1" }]
+              : []),
+        ],
+      })),
+    },
+    {
       type: "tendril",
       desc: "Rented Tendril compute: buy credit, rent a machine, run code on it, release it.",
       templates: TENDRIL_TEMPLATES.map((t) => ({
@@ -433,9 +431,11 @@ export function buildNodeCatalog(): NodeCatalog {
         name: t.name,
         desc: t.desc,
         kind: kindOf("tendril", t.id),
-        presets: { tendrilAction: t.action, tendrilHours: "1", tendrilAmount: "10" },
+        presets: { tendrilAction: t.action, tendrilHours: "1", tendrilAmount: t.action === "auto" ? "" : "10" },
         fields:
-          t.action === "topup"
+          t.action === "auto"
+            ? [{ key: "tendrilAmount", where: "field" as const, label: "Budget (USD, optional)", placeholder: "1" }]
+            : t.action === "topup"
             ? [
                 { key: "tendrilAmount", where: "field" as const, label: "Amount (USD)", placeholder: "10" },
                 { key: "tendrilMinBalance", where: "field" as const, label: "Only if credit below (USD)", hint: "blank tops up on every run" },

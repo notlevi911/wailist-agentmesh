@@ -1,6 +1,6 @@
 import type { PaymentMethod } from "@/components/checkout/types";
 
-// Credit wallet model. Both fields are server-owned and neither is persisted
+// Credit wallet model. These values are server-owned and are not persisted
 // locally: balanceUSD comes from users.credit_balance_usd_micros and purchases
 // from credit_ledger, the same rows the payment webhooks write and settle. A
 // per-browser copy showed the wrong history after a sign-out or an account
@@ -33,5 +33,6 @@ export interface Purchase {
 
 export interface CreditsState {
   balanceUSD: number;
+  lowBalanceThresholdUSD: number;
   purchases: Purchase[]; // newest first
 }

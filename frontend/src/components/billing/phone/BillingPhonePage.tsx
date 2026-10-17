@@ -3,6 +3,7 @@ import { useState } from "react";
 import Link from "next/link";
 import { ghostBtn } from "@/components/ui/buttons";
 import { IconArrow, IconWallet } from "@/components/ui";
+import { BalanceLoadNotice } from "@/components/billing/BalanceLoadNotice";
 import { PurchaseHistory } from "@/components/billing/PurchaseHistory";
 import { creditsForTopup } from "@/lib/credits/fx";
 import type { Purchase } from "@/lib/credits/types";
@@ -27,6 +28,9 @@ const shortINR = (n: number) =>
 export interface BillingPhoneProps {
   balanceUSD: number;
   balanceKnown: boolean;
+  balanceLoading: boolean;
+  balanceFailed: boolean;
+  onRetryBalance: () => Promise<void>;
   isLow: boolean;
   /** Spent across every workflow over the same 30 days the list counts. */
   // null while unknown: still loading, or the load failed.
@@ -67,7 +71,7 @@ export function BillingPhonePage(p: BillingPhoneProps) {
   const [allPayments, setAllPayments] = useState(false);
   const [howOpen, setHowOpen] = useState(false);
 
-  const state = !p.balanceKnown ? "unknown" : p.isLow ? "low" : "ok";
+  const state = !p.balanceKnown || p.balanceFailed || p.balanceLoading ? "unknown" : p.isLow ? "low" : "ok";
   const credits =
     p.usdPerINR > 0 && p.canCheckout
       ? creditsForTopup(p.effectiveINR, p.usdPerINR)
@@ -99,25 +103,27 @@ export function BillingPhonePage(p: BillingPhoneProps) {
           <span className="bilp-stat__label">Balance</span>
           <span className="bilp-stat__row">
             <span className="bilp-stat__value">
-              {p.balanceKnown ? fmtUSD(p.balanceUSD) : "—"}
+              {p.balanceKnown ? fmtUSD(p.balanceUSD) : "-"}
             </span>
             <span className="bilp-pill">
               <span className="bilp-pill__dot" aria-hidden />
-              {state === "unknown"
-                ? "Checking"
-                : state === "low"
-                  ? "Low"
-                  : "Active"}
+              {p.balanceLoading
+                ? (p.balanceKnown ? "Refreshing" : "Checking")
+                : p.balanceFailed
+                  ? "Unavailable"
+                  : state === "unknown" ? "Checking" : state === "low" ? "Low" : "Active"}
             </span>
           </span>
         </div>
         <div className="bilp-stat">
           <span className="bilp-stat__label">Spent · 30d</span>
           <span className="bilp-stat__value">
-            {p.spent30dUSD === null ? "—" : fmtUSD(p.spent30dUSD)}
+            {p.spent30dUSD === null ? "-" : fmtUSD(p.spent30dUSD)}
           </span>
         </div>
       </section>
+
+      <BalanceLoadNotice known={p.balanceKnown} failed={p.balanceFailed} loading={p.balanceLoading} onRetry={p.onRetryBalance} />
 
       {p.returnState && (
         <p className="bilp-note" data-tone={p.returnState.tone} role="status">
@@ -182,7 +188,7 @@ export function BillingPhonePage(p: BillingPhoneProps) {
               onChange={(e) => p.onCustomChange(e.target.value)}
             />
             <span className="bilp-amount__usd">
-              {credits === null ? "≈ —" : `≈ ${fmtUSD(credits)}`}
+              {credits === null ? "≈ -" : `≈ ${fmtUSD(credits)}`}
             </span>
           </div>
 

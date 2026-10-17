@@ -3,6 +3,7 @@ package nodes
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net/url"
@@ -237,13 +238,13 @@ func dispatchBuildCall(ctx context.Context, graph *models.WorkflowGraph, c gemin
 		}
 		refuse, note := judgeProbe(u, probe)
 		if refuse != "" {
-			return map[string]any{"result": "error: " + refuse}
+			return map[string]any{"result": "error: " + refuse + noNodeCreatedNote(c.name, nil)}
 		}
 		probeNote = note
 	}
 	result, err := applyGraphOpResolved(graph, c.name, c.args, resolved)
 	if err != nil {
-		return map[string]any{"result": "error: " + err.Error()}
+		return map[string]any{"result": "error: " + err.Error() + noNodeCreatedNote(c.name, err)}
 	}
 	return map[string]any{"result": result + probeNote}
 }
@@ -536,6 +537,25 @@ func clip(s string, n int) string {
 		return s
 	}
 	return string([]rune(s)[:n-1]) + "…"
+}
+
+// noNodeCreatedNote is the note appended to a rejected add_node: nothing was
+// created, so there is no id to refer to. Without it a live build invented
+// one ("n_1789376858057591417") and spent two rounds trying to update and
+// connect a node that never existed.
+//
+// Not for the rejections that name a node already on the graph (they tell the
+// model to use update_node on it, which this would contradict), and not for
+// any other tool.
+func noNodeCreatedNote(toolName string, err error) string {
+	if toolName != "add_node" {
+		return ""
+	}
+	var exists nodeExistsError
+	if err != nil && errors.As(err, &exists) {
+		return ""
+	}
+	return " -- no node was created, so there is no id for it yet; fix the call and add it again"
 }
 
 // scheduleLabel says what set_schedule did, in the user's terms.

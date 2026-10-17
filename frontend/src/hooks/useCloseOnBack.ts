@@ -6,9 +6,7 @@ import { useIsHandheld } from "./useIsHandheld";
 // Lets the system Back gesture close an open sheet instead of leaving the page
 // underneath it.
 //
-// The Android app has no backButton listener on purpose (see the comment in
-// AndroidManifest.xml): Capacitor steps back through the WebView's history.
-// So the sheet adds one history entry for itself when it opens, and Back takes
+// The sheet adds one history entry for itself when it opens, and Back takes
 // that entry off rather than the page. The URL does not change, and the entry
 // carries the current history state so the router still recognises it.
 //
@@ -22,6 +20,10 @@ const KEY = "__amSheet";
 // top bar menu, CheckoutModal): the entry is added when it opens and taken off
 // when it closes. A sheet its parent renders only while open can leave it out.
 export function useCloseOnBack(onClose: () => void, active = true): () => void {
+  return useSheetHistory(onClose, active).close;
+}
+
+export function useSheetHistory(onClose: () => void, active = true) {
   const handheld = useIsHandheld();
   const enabled = IS_NATIVE || handheld;
   const onCloseRef = useRef(onClose);
@@ -30,6 +32,7 @@ export function useCloseOnBack(onClose: () => void, active = true): () => void {
   });
   // Whether our entry is still on the stack.
   const pushed = useRef(false);
+  const entryHref = useRef<string | null>(null);
   // Set when a cleanup has scheduled the entry for removal, and cleared if the
   // hook re-activates before that runs -- which is exactly what React does in
   // development, where it invokes an effect, its cleanup, then the effect
@@ -48,6 +51,7 @@ export function useCloseOnBack(onClose: () => void, active = true): () => void {
       window.history.pushState({ ...(state ?? {}), [KEY]: true }, "");
     }
     pushed.current = true;
+    entryHref.current = window.location.href;
 
     const onPopState = () => {
       if (!pushed.current) return;
@@ -80,11 +84,26 @@ export function useCloseOnBack(onClose: () => void, active = true): () => void {
     };
   }, [active, enabled]);
 
-  return useCallback(() => {
+  const close = useCallback(() => {
     if (pushed.current) {
       pushed.current = false;
       window.history.back();
     }
     onCloseRef.current();
   }, []);
+
+  const consumeHistoryEntry = useCallback(() => {
+    const state = window.history.state as Record<string, unknown> | null;
+    if (!active || !enabled || !pushed.current || !state?.[KEY] || window.location.href !== entryHref.current) return false;
+    pushed.current = false;
+    popScheduled.current = false;
+    const nextState = { ...state };
+    delete nextState[KEY];
+    // Replace this temporary entry with the destination, without an async Back
+    // racing the router or leaving a duplicate page in the history stack.
+    window.history.replaceState(nextState, "");
+    return true;
+  }, [active, enabled]);
+
+  return { close, consumeHistoryEntry };
 }

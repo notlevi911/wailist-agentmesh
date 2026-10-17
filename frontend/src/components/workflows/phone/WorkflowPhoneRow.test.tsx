@@ -24,17 +24,28 @@ function renderRow(overrides: Partial<Workflow> = {}) {
       <WorkflowPhoneRow workflow={wf} now={NOW} />
     </ul>,
   );
-  return screen.getByRole("link");
+  return screen.getByRole("listitem");
 }
 
 afterEach(cleanup);
 
 describe("WorkflowPhoneRow", () => {
-  it("is one card linking to the workflow, with nothing else to tap", () => {
+  it("opens the workflow and its scoped usage from separate links", () => {
     const card = renderRow();
-    expect(card.getAttribute("href")).toContain("wf-triage");
+    expect(
+      within(card)
+        .getByRole("link", {
+          name: "Customer Support Triage, deployed. $4.22 spent, next in 12 min.",
+        })
+        .getAttribute("href"),
+    ).toContain("wf-triage");
+    expect(
+      within(card)
+        .getByRole("link", { name: "View usage for Customer Support Triage" })
+        .getAttribute("href"),
+    ).toBe("/usage?workflow=wf-triage");
     expect(within(card).queryAllByRole("button")).toHaveLength(0);
-    expect(screen.getAllByRole("link")).toHaveLength(1);
+    expect(within(card).getAllByRole("link")).toHaveLength(2);
   });
 
   it("puts the figures on one line ending in the workflow's state", () => {
@@ -76,9 +87,10 @@ describe("WorkflowPhoneRow", () => {
   });
 
   it("names the status in words, because the rail is only colour", () => {
-    expect(renderRow().getAttribute("aria-label")).toBe(
-      "Customer Support Triage, deployed. $4.22 spent, next in 12 min.",
-    );
+    const card = renderRow();
+    expect(
+      within(card).getAllByRole("link")[0].getAttribute("aria-label"),
+    ).toBe("Customer Support Triage, deployed. $4.22 spent, next in 12 min.");
   });
 
   it("leaves out the logo, tags, updated time and Open or Zone", () => {
@@ -100,9 +112,9 @@ describe("WorkflowPhoneRow", () => {
     expect(card.textContent).toContain("draft");
     expect(card.textContent).toContain("never run");
     expect(card.textContent).not.toContain("$");
-    expect(card.getAttribute("aria-label")).toBe(
-      "Customer Support Triage, draft. Never run.",
-    );
+    expect(
+      within(card).getAllByRole("link")[0].getAttribute("aria-label"),
+    ).toBe("Customer Support Triage, draft. Never run.");
   });
 
   it("says nothing is queued for a deployed workflow with no schedule", () => {

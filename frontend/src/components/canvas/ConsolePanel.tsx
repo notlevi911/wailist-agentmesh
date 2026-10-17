@@ -1,5 +1,5 @@
 "use client";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Pill } from "@/components/ui";
 import type { DeadLetterRun } from "@/lib/api";
 import {
@@ -8,6 +8,12 @@ import {
   type X402Payment,
 } from "./useRunTranscript";
 import { runSummary } from "./chat/resolveReply";
+import {
+  costsByNode,
+  describeStepCost,
+  formatUsdMicros,
+  type RunCosts,
+} from "@/lib/runCosts";
 
 interface ConsolePanelProps {
   open: boolean;
@@ -18,6 +24,9 @@ interface ConsolePanelProps {
   elapsed: number | null;
   done: boolean;
   deadLetters: DeadLetterRun[];
+  // What the run was charged, from the debit ledger (#111). Null until the
+  // run record is fetched, or when the backend does not report costs.
+  costs: RunCosts | null;
   // Takes the dead-letter's own runId rather than relying solely on the
   // caller's live session state: a dead-letter row restored from
   // useRunTranscript's cache (see CachedRun.deadLetters) can render with no
@@ -46,16 +55,27 @@ export function ConsolePanel({
   elapsed,
   done,
   deadLetters,
+  costs,
   onResume,
 }: ConsolePanelProps) {
   const [height, setHeight] = useState(DEFAULT_HEIGHT);
   const [resizing, setResizing] = useState(false);
   const bottomRef = useRef<HTMLDivElement>(null);
 
-  // Below this the four fixed columns (52 + 34 + 110 + gaps) leave the output
-  // cell so little room that JSON wraps a few characters per line -- a single
-  // step measured 431px tall in a 293px-wide console. Rows switch to a stacked
-  // layout instead of squeezing.
+  // Ledger charges are per node, but a resumed node has one log row per
+  // attempt -- so a node's cost is shown once, on its last row (#111).
+  const stepCosts = useMemo(() => costsByNode(costs), [costs]);
+  const lastRowByNode = useMemo(() => {
+    const last = new Map<string, number>();
+    logs.forEach((l, i) => last.set(l.nodeId, i));
+    return last;
+  }, [logs]);
+  const showStepCosts = stepCosts.size > 0;
+
+  // Below this the fixed metadata columns (time, status, node, optional cost)
+  // leave the output cell so little room that JSON wraps a few characters per
+  // line -- a single step measured 431px tall in a 293px-wide console. Rows
+  // switch to a stacked layout instead of squeezing.
   const [compactRows, setCompactRows] = useState(false);
   const logListRef = useRef<HTMLDivElement | null>(null);
   // Observed on the list, not the window: the console's width is whatever is
@@ -292,14 +312,16 @@ export function ConsolePanel({
                 display: "grid",
                 gridTemplateColumns: compactRows
                   ? "1fr"
-                  : "52px 34px 110px 1fr",
+                  : showStepCosts
+                    ? "52px 34px 110px max-content minmax(0, 1fr)"
+                    : "52px 34px 110px minmax(0, 1fr)",
                 gap: compactRows ? 2 : 10,
                 alignItems: compactRows ? "stretch" : "baseline",
                 borderBottom: "1px solid var(--border-soft)",
                 padding: "3px 0",
               }}
             >
-              {/* display:contents keeps these three as real grid cells in the
+              {/* display:contents keeps these fields as real grid cells in the
                     wide layout; in compact mode they collapse onto one meta
                     line above the output instead of each taking a row. */}
               <div
@@ -349,6 +371,25 @@ export function ConsolePanel({
                     </span>
                   )}
                 </span>
+                {showStepCosts &&
+                  (() => {
+                    // Ledger charges include billable steps without receipts.
+                    const step = stepCosts.get(l.nodeId);
+                    const showOnThisRow =
+                      step && lastRowByNode.get(l.nodeId) === i;
+                    return (
+                      <span
+                        style={{ color: "var(--warm)", whiteSpace: "nowrap" }}
+                        title={
+                          showOnThisRow ? describeStepCost(step) : undefined
+                        }
+                      >
+                        {showOnThisRow
+                          ? `· ${formatUsdMicros(step.totalUsdMicros)}`
+                          : null}
+                      </span>
+                    );
+                  })()}
               </div>
               <OutputCell output={l.output} />
             </div>
@@ -383,6 +424,9 @@ export function ConsolePanel({
                 <div style={{ color, paddingTop: 6, fontSize: "var(--t-0)" }}>
                   {headline} · {(elapsed ?? 0).toFixed(1)}s · {succeeded}/{total}{" "}
                   nodes succeeded
+                  {costs && (
+                    <> · {formatUsdMicros(costs.totalUsdMicros)} charged</>
+                  )}
                 </div>
               );
             })()}
@@ -448,7 +492,7 @@ function DeadLetterRow({
             cursor: "pointer",
           }}
         >
-          {confirming ? "Confirm — completed steps won't re-run" : "Resume"}
+          {confirming ? "Confirm: completed steps won't re-run" : "Resume"}
         </button>
       </div>
       <div style={{ color: "var(--fg-dim)", fontSize: "var(--t-0)", paddingTop: 2 }}>
@@ -540,7 +584,7 @@ function OutputCell({ output }: { output: unknown }) {
         </span>
       )}
       {text === "" ? (
-        !payment && <span style={{ color: "var(--fg-dim)" }}>—</span>
+        !payment && <span style={{ color: "var(--fg-dim)" }}>-</span>
       ) : collapsible ? (
         <>
           <button

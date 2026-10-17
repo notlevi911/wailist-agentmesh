@@ -150,6 +150,11 @@ func (d *Deps) StopWorkflow(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// GetRun returns a run the caller owns, with its step logs, dead-letter rows,
+// and costs: what the run was charged, per step and in total, summed from its
+// debit_ledger rows (#111). costs covers every billable step the same way --
+// platform-key LLM fees and connector flat fees as well as x402 calls -- and
+// counts only committed charges, never a balance that was merely reserved.
 func (d *Deps) GetRun(w http.ResponseWriter, r *http.Request) {
 	runID := chi.URLParam(r, "runId")
 	ctx := r.Context()
@@ -181,7 +186,17 @@ func (d *Deps) GetRun(w http.ResponseWriter, r *http.Request) {
 	if deadLetters == nil {
 		deadLetters = []models.DeadLetterRun{}
 	}
-	respond.JSON(w, http.StatusOK, map[string]any{"run": run, "logs": logs, "deadLetters": deadLetters})
+	debits, err := d.Store.ListDebitLedger(ctx, runID)
+	if err != nil {
+		respond.Error(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	respond.JSON(w, http.StatusOK, map[string]any{
+		"run":         run,
+		"logs":        logs,
+		"deadLetters": deadLetters,
+		"costs":       models.SummarizeRunCosts(debits),
+	})
 }
 
 // ResumeRun continues a run that ended in "failed" or "stopped": nodes

@@ -10,18 +10,9 @@ import (
 	"github.com/agentmesh/backend/internal/models"
 )
 
-// elevenLabsAPIBase is overridden in tests via SetElevenLabsAPIBaseForTest.
-var elevenLabsAPIBase = "https://api.elevenlabs.io"
-
 // SetElevenLabsAPIBaseForTest overrides the ElevenLabs API base URL. Call
 // only from tests. Pass "" to reset to the real API.
-func SetElevenLabsAPIBaseForTest(base string) {
-	if base == "" {
-		elevenLabsAPIBase = "https://api.elevenlabs.io"
-	} else {
-		elevenLabsAPIBase = base
-	}
-}
+func SetElevenLabsAPIBaseForTest(base string) { setAPIBaseForTest("elevenlabs", base) }
 
 func sendElevenLabs(ctx context.Context, node models.WorkflowNode, rc RunContexter) (any, error) {
 	apiKey := secretVal(node, "elevenlabsAPIKey")
@@ -29,7 +20,7 @@ func sendElevenLabs(ctx context.Context, node models.WorkflowNode, rc RunContext
 		return "elevenlabs_skipped_no_api_key", ErrActionSkipped
 	}
 	voiceID := configVal(node, "elevenlabsVoiceID", "21m00Tcm4TlvDq8ikWAM")
-	target := elevenLabsAPIBase + "/v1/text-to-speech/" + url.PathEscape(voiceID)
+	target := apiBase("elevenlabs") + "/v1/text-to-speech/" + url.PathEscape(voiceID)
 	payload := map[string]any{"text": resolveMessage(node, rc), "model_id": "eleven_monolingual_v1"}
 	headers := map[string]string{"xi-api-key": apiKey}
 	req, err := newJSONRequest(ctx, http.MethodPost, target, headers, payload)
