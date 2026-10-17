@@ -225,12 +225,7 @@ func (d *Deps) HelixboxConsoleRun(w http.ResponseWriter, r *http.Request) {
 	d.Store.FinishRun(context.WithoutCancel(r.Context()), run.ID, status)
 
 	if execErr != nil {
-		// A blocked balance is the user's problem to fix (top up), not a
-		// gateway failure, so it gets 402 rather than 502. lib/helixbox.ts
-		// turns that status into a HelixboxRunError the console reads to show
-		// an "Add credits" button instead of a bare error line.
-		if isBalanceBlocked(execErr) {
-			respond.Error(w, http.StatusPaymentRequired, execErr.Error())
+		if respondConsolePaymentRefusal(w, execErr) {
 			return
 		}
 		respond.Error(w, http.StatusBadGateway, execErr.Error())
