@@ -253,7 +253,7 @@ func (d *Deps) PrismRepoReview(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ledger := newConsolePaymentLedger(d.Store, userID, wf.ID, run.ID)
+	ledger := newConsoleBatchPaymentLedger(d.Store, userID, wf.ID, run.ID)
 	relay := d.prismRelayConfig(ledger)
 	// Each file's call bills the vendor amount only; the flat markup is charged
 	// once below, for the run as a whole. See the field's doc comment.
@@ -262,8 +262,12 @@ func (d *Deps) PrismRepoReview(w http.ResponseWriter, r *http.Request) {
 	// The fee is reserved BEFORE any file is reviewed. Reserving it after would
 	// mean a user with just enough credit for the files but not the fee gets
 	// every file paid for and then a failure to collect our own markup.
-	if err := d.Store.ReserveCredits(r.Context(), userID, models.X402PlatformFeeUSDMicros); err != nil {
+	if err := ledger.Reserve(r.Context(), models.X402PlatformFeeUSDMicros); err != nil {
 		d.Store.FinishRun(context.WithoutCancel(r.Context()), run.ID, models.RunStatusFailed)
+		if errors.Is(err, errConsoleSpendLimit) {
+			respond.Error(w, http.StatusPaymentRequired, err.Error())
+			return
+		}
 		if errors.Is(err, db.ErrInsufficientCredits) {
 			respond.Error(w, http.StatusPaymentRequired,
 				"Not enough credit to start this review. Nothing was charged.")
@@ -282,12 +286,7 @@ func (d *Deps) PrismRepoReview(w http.ResponseWriter, r *http.Request) {
 		// Release the reservation if the run died before the fee was committed;
 		// otherwise the user's balance stays decremented with nothing to show.
 		if !feeCommitted {
-			bctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), ledgerCompensationTimeout)
-			defer cancel()
-			if err := d.Store.ReleaseReservedCredits(bctx, userID, models.X402PlatformFeeUSDMicros); err != nil {
-				log.Printf("CRITICAL: prism repo review failed to release the reserved platform fee (balance stranded): user=%s run=%s err=%v",
-					userID, run.ID, err)
-			}
+			ledger.Release(r.Context(), models.X402PlatformFeeUSDMicros)
 		}
 	}()
 

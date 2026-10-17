@@ -3,8 +3,12 @@ package handlers
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"log"
+	"math"
 	"net/http"
+	"sync"
 	"time"
 
 	"github.com/agentmesh/backend/internal/db"
@@ -17,6 +21,11 @@ import (
 // the triggering request's context — same rationale as runner.go's constant
 // of the same name, which this is a copy of (see newConsolePaymentLedger).
 const ledgerCompensationTimeout = 10 * time.Second
+
+var (
+	errConsoleSpendLimit = errors.New("call exceeds your per-call spend limit")
+	errConsoleSpendCheck = errors.New("could not check your spending limit")
+)
 
 // newConsolePaymentLedger is runner.go's newPaymentLedger without a
 // *Runner: the console executes one Tendril node directly (runTendrilAction
@@ -32,9 +41,49 @@ const ledgerCompensationTimeout = 10 * time.Second
 // runner.go's Tendril case populating only Ledger/LegacyLedger, both dead
 // on this code path) and fixed 2026-08-05.
 func newConsolePaymentLedger(store *db.Store, userID, workflowID, runID string) nodes.PaymentLedger {
+	return newConsoleLedger(store, userID, workflowID, runID, false)
+}
+
+func newConsoleBatchPaymentLedger(store *db.Store, userID, workflowID, runID string) nodes.PaymentLedger {
+	return newConsoleLedger(store, userID, workflowID, runID, true)
+}
+
+func newConsoleLedger(store *db.Store, userID, workflowID, runID string, batch bool) nodes.PaymentLedger {
+	var mu sync.Mutex
+	var reservedAndSpent int64
 	return nodes.PaymentLedger{
 		Reserve: func(cctx context.Context, amountUSDMicros int64) error {
-			return store.ReserveCredits(cctx, userID, amountUSDMicros)
+			if amountUSDMicros < 0 {
+				return errConsoleSpendCheck
+			}
+			if amountUSDMicros == 0 {
+				return nil
+			}
+			mu.Lock()
+			defer mu.Unlock()
+			total := amountUSDMicros
+			if batch {
+				// One review action shares its ceiling across the fee and all files.
+				if amountUSDMicros > math.MaxInt64-reservedAndSpent {
+					return errConsoleSpendCheck
+				}
+				total += reservedAndSpent
+			}
+			settings, err := store.GetUserSettings(cctx, userID)
+			if err != nil {
+				log.Printf("console spending limit check failed: user=%s err=%v", userID, err)
+				return errConsoleSpendCheck
+			}
+			if limit := settings.MaxCallSpendUSDMicros; limit != nil && total > *limit {
+				return fmt.Errorf("%w: charge %d USD micros, limit %d", errConsoleSpendLimit, total, *limit)
+			}
+			if err := store.ReserveCredits(cctx, userID, amountUSDMicros); err != nil {
+				return err
+			}
+			if batch {
+				reservedAndSpent = total
+			}
+			return nil
 		},
 		Commit: func(cctx context.Context, nodeID string, amountUSDMicros int64, kind string) {
 			bctx, cancel := context.WithTimeout(context.WithoutCancel(cctx), ledgerCompensationTimeout)
@@ -45,11 +94,17 @@ func newConsolePaymentLedger(store *db.Store, userID, workflowID, runID string) 
 			}
 		},
 		Release: func(cctx context.Context, amountUSDMicros int64) {
+			mu.Lock()
+			defer mu.Unlock()
 			bctx, cancel := context.WithTimeout(context.WithoutCancel(cctx), ledgerCompensationTimeout)
 			defer cancel()
 			if err := store.ReleaseReservedCredits(bctx, userID, amountUSDMicros); err != nil {
 				log.Printf("CRITICAL: tendril console release reserved credits failed (balance permanently stranded): user=%s amount=%d err=%v",
 					userID, amountUSDMicros, err)
+				return
+			}
+			if batch {
+				reservedAndSpent -= amountUSDMicros
 			}
 		},
 	}
