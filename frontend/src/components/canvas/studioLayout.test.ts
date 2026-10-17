@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { fitPanels, RAIL_W } from "./studioLayout";
+import { clampStudioPanelWidth, fitPanels, RAIL_W } from "./studioLayout";
 import { INSPECTOR, MIN_CANVAS, PALETTE } from "./panelSizing";
 
 const base = {
@@ -11,24 +11,24 @@ const base = {
 
 describe("fitPanels", () => {
   it("keeps both panels open when the row can hold them", () => {
-    // 280 + 320 + 320 = 920
     expect(fitPanels({ ...base, rowWidth: 1400 })).toEqual({
       palette: true,
       inspector: true,
       forced: false,
     });
-    expect(fitPanels({ ...base, rowWidth: 920 }).palette).toBe(true);
+    expect(fitPanels({ ...base, rowWidth: 932 }).palette).toBe(true);
+    expect(fitPanels({ ...base, rowWidth: 931 }).palette).toBe(false);
   });
 
   it("drops the palette first, and keeps the chat rail", () => {
-    // 919 cannot hold both; 26 + 320 + 320 = 666 can hold the inspector alone.
+    // The open inspector also occupies a six-pixel resize handle.
     const fit = fitPanels({ ...base, rowWidth: 919 });
     expect(fit).toEqual({ palette: false, inspector: true, forced: true });
   });
 
   it("collapses both only when the inspector alone no longer fits", () => {
-    // Below 26 + 320 + 320 = 666 the inspector has to give way too.
-    expect(fitPanels({ ...base, rowWidth: 665 })).toEqual({
+    expect(fitPanels({ ...base, rowWidth: 672 }).inspector).toBe(true);
+    expect(fitPanels({ ...base, rowWidth: 671 })).toEqual({
       palette: false,
       inspector: false,
       forced: true,
@@ -79,8 +79,23 @@ describe("fitPanels", () => {
   it("accounts for the panels' actual widths, not their defaults", () => {
     // A palette dragged out to its max needs a wider row before it fits.
     const wide = { ...base, paletteW: PALETTE.max, inspectorW: INSPECTOR.max };
-    expect(fitPanels({ ...wide, rowWidth: 1419 }).palette).toBe(false);
-    expect(fitPanels({ ...wide, rowWidth: 1420 }).palette).toBe(true);
+    expect(fitPanels({ ...wide, rowWidth: 1431 }).palette).toBe(false);
+    expect(fitPanels({ ...wide, rowWidth: 1432 }).palette).toBe(true);
+  });
+});
+
+describe("studio resize clearance", () => {
+  it("leaves a 320px canvas beside a collapsed rail at 700px", () => {
+    expect(clampStudioPanelWidth(500, PALETTE, 700, RAIL_W, false)).toBe(348);
+    expect(clampStudioPanelWidth(500, INSPECTOR, 700, RAIL_W, false)).toBe(348);
+  });
+
+  it("reserves both resize handles when both panels are visible", () => {
+    expect(clampStudioPanelWidth(460, PALETTE, 960, 320, true)).toBe(308);
+  });
+
+  it("keeps unmeasured rows bounded by the panel's own limits", () => {
+    expect(clampStudioPanelWidth(500, PALETTE, 0, RAIL_W, false)).toBe(460);
   });
 });
 

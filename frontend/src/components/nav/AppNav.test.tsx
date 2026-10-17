@@ -129,7 +129,7 @@ it("exposes the disclosure target only while its links are available", () => {
   fireEvent.click(trigger);
   expect(trigger.getAttribute("aria-expanded")).toBe("false");
   expect(trigger.hasAttribute("aria-controls")).toBe(false);
-  expect(container.querySelector(".appnav__sheet")?.getAttribute("aria-hidden")).toBe("true");
+  expect(container.querySelector(".appnav__sheet")).toBeNull();
   expect(screen.queryByRole("button", { name: "Usage" })).toBeNull();
 });
 
@@ -150,11 +150,18 @@ it("releases the sheet and scroll lock when the desktop breakpoint is crossed", 
     removeEventListener: vi.fn(),
   };
   vi.stubGlobal("matchMedia", () => media);
-  const overflow = document.body.style.overflow;
+  const targets = [document.documentElement, document.body];
+  const previous = targets.map(({ style }) => ({ x: style.overflowX, y: style.overflowY }));
   navigation(vi.fn());
   fireEvent.click(screen.getByRole("button", { name: "Menu" }));
-  expect(document.body.style.overflow).toBe("hidden");
+  for (const { style } of targets) {
+    expect(style.overflowX).toBe("hidden");
+    expect(style.overflowY).toBe("hidden");
+  }
   act(() => { media.matches = false; changed(); });
   expect(screen.getByRole("button", { name: "Menu" }).getAttribute("aria-expanded")).toBe("false");
-  expect(document.body.style.overflow).toBe(overflow);
+  targets.forEach(({ style }, index) => {
+    expect(style.overflowX).toBe(previous[index].x);
+    expect(style.overflowY).toBe(previous[index].y);
+  });
 });

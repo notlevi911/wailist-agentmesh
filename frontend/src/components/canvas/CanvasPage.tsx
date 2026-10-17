@@ -32,7 +32,7 @@ import { workflowHref } from "@/lib/routes";
 import { ghostBtnSm, primaryBtnSm } from "@/components/ui/buttons";
 import { useIsCompact } from "@/hooks/useIsCompact";
 import { useIsHandheld } from "@/hooks/useIsHandheld";
-import { fitPanels, RAIL_W } from "./studioLayout";
+import { clampStudioPanelWidth, fitPanels, RAIL_W } from "./studioLayout";
 import { runBlockedReason } from "./runBlocked";
 import {
   isGraphRunnable,
@@ -53,7 +53,6 @@ import { ShareModal } from "@/components/workflows/ShareModal";
 import {
   PALETTE,
   INSPECTOR,
-  clampWidth,
   loadWidths,
   saveWidths,
 } from "./panelSizing";
@@ -208,8 +207,8 @@ export function CanvasPage({ workflowId }: CanvasPageProps) {
       // Reserve what the OTHER panel actually occupies. A collapsed panel is
       // a 26px rail, so reserving its full width left the reader who closed
       // one to make room for the other with no extra room at all.
-      setPaletteW(clampWidth(pw, PALETTE, cw, ic ? RAIL_W : iw));
-      setInspectorW(clampWidth(iw, INSPECTOR, cw, pc ? RAIL_W : pw));
+      setPaletteW(clampStudioPanelWidth(pw, PALETTE, cw, ic ? RAIL_W : iw, !ic));
+      setInspectorW(clampStudioPanelWidth(iw, INSPECTOR, cw, pc ? RAIL_W : pw, !pc));
     };
     // Clamp immediately (getBoundingClientRect forces layout) so the initial
     // fit never depends on the observer's async first delivery, then observe
@@ -233,21 +232,23 @@ export function CanvasPage({ workflowId }: CanvasPageProps) {
 
   // Dragging reserves only the space occupied by the other visible panel.
   const resizePalette = useCallback((req: number) => {
-    const w = clampWidth(
+    const w = clampStudioPanelWidth(
       req,
       PALETTE,
       rowWidth(),
       fit.inspector ? widthsRef.current.inspectorW : RAIL_W,
+      fit.inspector,
     );
     desiredRef.current = { ...desiredRef.current, paletteW: w };
     setPaletteW(w);
   }, [fit.inspector]);
   const resizeInspector = useCallback((req: number) => {
-    const w = clampWidth(
+    const w = clampStudioPanelWidth(
       req,
       INSPECTOR,
       rowWidth(),
       fit.palette ? widthsRef.current.paletteW : canEdit ? RAIL_W : 0,
+      fit.palette,
     );
     desiredRef.current = { ...desiredRef.current, inspectorW: w };
     setInspectorW(w);
@@ -1411,7 +1412,8 @@ function CanvasTopbar({
   return (
     <div
       style={{
-        height: 52,
+        height: "var(--canvas-bar-height, 52px)",
+        minHeight: 52,
         flexShrink: 0,
         background: "var(--bg-elev-1)",
         borderBottom: "1px solid var(--border)",
@@ -1419,7 +1421,7 @@ function CanvasTopbar({
         alignItems: "center",
         // Tokens, defaulting to the desktop values: see .am-canvas-bar in
         // responsive.css for the phone step.
-        padding: "0 var(--canvas-bar-pad, 14px)",
+        padding: "var(--canvas-bar-pad-y, 0) var(--canvas-bar-pad, 14px)",
         gap: "var(--canvas-bar-gap, 14px)",
       }}
       className="am-canvas-bar"

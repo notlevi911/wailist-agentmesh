@@ -1,7 +1,24 @@
-import { MIN_CANVAS } from "./panelSizing";
+import { clampWidth, MIN_CANVAS, type Bounds } from "./panelSizing";
 
 // Match .am-studio-rail in responsive.css.
 export const RAIL_W = 26;
+// Match the occupied width of ResizeHandle.
+const HANDLE_W = 6;
+
+export function clampStudioPanelWidth(
+  requested: number,
+  bounds: Bounds,
+  rowWidth: number,
+  otherWidth: number,
+  otherOpen: boolean,
+): number {
+  return clampWidth(
+    requested,
+    bounds,
+    rowWidth > 0 ? rowWidth - HANDLE_W - (otherOpen ? HANDLE_W : 0) : rowWidth,
+    otherWidth,
+  );
+}
 
 export interface StudioFitInput {
   /** Measured width of the panel row. 0 or NaN = not measured yet. */
@@ -24,7 +41,7 @@ export interface StudioFit {
 }
 
 function widthOf(open: boolean, w: number): number {
-  return open ? w : RAIL_W;
+  return open ? w + HANDLE_W : RAIL_W;
 }
 
 function fits(

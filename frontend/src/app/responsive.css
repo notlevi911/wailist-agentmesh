@@ -645,6 +645,15 @@
   .am-studio-stats-extra {
     display: none;
   }
+  .am-canvas-bar {
+    --canvas-bar-height: auto;
+    --canvas-bar-pad-y: 8px;
+    flex-wrap: wrap;
+    row-gap: 8px;
+  }
+  .am-canvas-bar__wide {
+    display: none !important;
+  }
 }
 
 /* The studio top bar on a phone. At 360px it needed about 393px: the logo,
