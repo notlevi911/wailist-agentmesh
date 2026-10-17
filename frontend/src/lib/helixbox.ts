@@ -1,4 +1,5 @@
 import { BASE, apiFetch } from "@/lib/api";
+import { paymentRefusalCode, type PaymentRefusalCode } from "./paymentRefusal";
 
 // HelixBox's x402 endpoints, as served by GET /helixbox/endpoints. The
 // backend's internal/helixbox package is the single source of truth for all of
@@ -131,16 +132,14 @@ export function formatRemaining(expiresAt: number, now: number): string | null {
   return "under a minute left";
 }
 
-// HelixboxRunError carries the HTTP status alongside the message so the
-// console can tell a blocked balance (402, backend's ErrBalanceBlocked) from a
-// gateway failure and offer a top-up instead of a bare error line. A 402 here
-// means the request was rejected BEFORE any payment, so nothing was charged.
 export class HelixboxRunError extends Error {
   readonly status: number;
-  constructor(message: string, status: number) {
+  readonly code: PaymentRefusalCode | null;
+  constructor(message: string, status: number, code?: unknown) {
     super(message);
     this.name = "HelixboxRunError";
     this.status = status;
+    this.code = paymentRefusalCode(status, code);
   }
 }
 
@@ -364,7 +363,7 @@ export const helixbox = {
     });
     const data = await res.json().catch(() => ({}));
     if (!res.ok) {
-      throw new HelixboxRunError(data.error ?? `run: ${res.status}`, res.status);
+      throw new HelixboxRunError(data.error ?? `run: ${res.status}`, res.status, data.code);
     }
     return data as HelixboxRunResult;
   },

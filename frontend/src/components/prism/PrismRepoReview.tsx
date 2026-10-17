@@ -10,6 +10,7 @@ import {
   type PrismRepoReviewResult,
 } from "@/lib/prism";
 import { PrismResult } from "./PrismResult";
+import { PAYMENT_RECOVERY, type PaymentRefusalCode } from "@/lib/paymentRefusal";
 
 // Reviewing a whole repository.
 //
@@ -95,7 +96,8 @@ export function PrismRepoReview({
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [listing_busy, setListingBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [billingBlocked, setBillingBlocked] = useState(false);
+  const [refusalCode, setRefusalCode] = useState<PaymentRefusalCode | null>(null);
+  const recovery = refusalCode ? PAYMENT_RECOVERY[refusalCode] : null;
 
   const [running, setRunning] = useState(false);
   const [result, setResult] = useState<PrismRepoReviewResult | null>(null);
@@ -117,7 +119,7 @@ export function PrismRepoReview({
     if (listing_busy) return;
     setListingBusy(true);
     setError(null);
-    setBillingBlocked(false);
+    setRefusalCode(null);
     setListing(null);
     setResult(null);
     try {
@@ -146,7 +148,7 @@ export function PrismRepoReview({
     if (!listing || running || selected.size === 0 || overCap) return;
     setRunning(true);
     setError(null);
-    setBillingBlocked(false);
+    setRefusalCode(null);
     setResult(null);
     try {
       setResult(
@@ -158,10 +160,7 @@ export function PrismRepoReview({
         ),
       );
     } catch (e) {
-      // A 402 is refused before anything is paid, so it gets a top-up button
-      // rather than a bare error — the same treatment the single-file panel
-      // gives the identical condition.
-      setBillingBlocked(e instanceof PrismRunError && e.status === 402);
+      setRefusalCode(e instanceof PrismRunError ? e.code : null);
       setError(e instanceof Error ? e.message : "The review failed.");
     } finally {
       setRunning(false);
@@ -211,10 +210,7 @@ export function PrismRepoReview({
           <div style={{ fontSize: "var(--t-2)", color: "var(--danger)", lineHeight: 1.55 }}>
             {error}
           </div>
-          {/* A 402 is refused before any file is reviewed, so the honest note
-              is "nothing moved" plus the way to fix it — the same treatment
-              the single-file panel gives the identical condition. */}
-          {billingBlocked && (
+          {recovery && (
             <div style={{ marginTop: 8 }}>
               <div
                 style={{
@@ -223,10 +219,10 @@ export function PrismRepoReview({
                   lineHeight: 1.55,
                 }}
               >
-                You were not charged. Add credit and run it again.
+                {recovery.message}
               </div>
               <a
-                href="/billing"
+                href={recovery.href}
                 style={{
                   display: "inline-block",
                   marginTop: 8,
@@ -235,7 +231,7 @@ export function PrismRepoReview({
                   textDecoration: "underline",
                 }}
               >
-                Add credits
+                {recovery.label}
               </a>
             </div>
           )}
