@@ -141,6 +141,7 @@ export function CanvasPage({ workflowId }: CanvasPageProps) {
     mq.addEventListener("change", update);
     return () => mq.removeEventListener("change", update);
   }, []);
+  const narrowEditorBlocked = isNarrow && canEdit && handheld;
 
   // -- Resizable side panels ------------------------------------------------
   // Widths start at defaults (so SSR and the first client render match), then a
@@ -267,11 +268,8 @@ export function CanvasPage({ workflowId }: CanvasPageProps) {
   // a different workflow remounts this component and every piece of state
   // returns to its initial value (loading=true, selectedId=null, …).
   useEffect(() => {
-    // The same three conditions the wall below renders on; they must stay in
-    // step. Leaving `handheld` out here while adding it to the wall left the
-    // narrow desktop studio mounted with its fetch skipped -- stuck on
-    // "loading…" forever.
-    if (isNarrow && canEdit && handheld) return;
+    // Desktop width changes must not reload over an unsaved graph.
+    if (narrowEditorBlocked) return;
 
     // Guards against a stale response overwriting fresher state: React 18
     // Strict Mode double-invokes this effect in dev (mount → cleanup →
@@ -323,7 +321,7 @@ export function CanvasPage({ workflowId }: CanvasPageProps) {
     return () => {
       cancelled = true;
     };
-  }, [workflowId, router, isNarrow, readOnly, canEdit, handheld]);
+  }, [workflowId, router, readOnly, narrowEditorBlocked]);
 
   // Auto-save: debounce 1.5s after any change, skip on initial load.
   // pendingSave holds the graph the debounce timer is still sitting on, and
@@ -914,7 +912,7 @@ export function CanvasPage({ workflowId }: CanvasPageProps) {
   // the wall was keyed on width alone, so a laptop window under 768px was
   // told to come back on a bigger screen while holding a mouse. The reason it
   // gives is about INPUT, not pixels.
-  if (isNarrow && canEdit && handheld) {
+  if (narrowEditorBlocked) {
     return (
       <div style={{ height: "100dvh", background: "var(--bg)" }}>
         <div className="canvas-narrow">
