@@ -18,6 +18,7 @@ import {
 import { formatFileSize, readFileAsBase64 } from "@/lib/fileEncoding";
 import { PrismResult } from "./PrismResult";
 import { PrismRepoReview } from "./PrismRepoReview";
+import { PAYMENT_RECOVERY, type PaymentRefusalCode } from "@/lib/paymentRefusal";
 
 // A stable identity for "this endpoint has no values yet". Without it the
 // `?? {}` fallback allocates a fresh object every render and the memo that
@@ -401,10 +402,8 @@ export function PrismConsolePage() {
 
   const [running, setRunning] = useState(false);
   const [runError, setRunError] = useState<string | null>(null);
-  // Set when the run was refused for want of credit (402). The error panel
-  // then offers a top-up instead of the generic "check Credits" note, and
-  // makes clear nothing was charged.
-  const [billingBlocked, setBillingBlocked] = useState(false);
+  const [refusalCode, setRefusalCode] = useState<PaymentRefusalCode | null>(null);
+  const recovery = refusalCode ? PAYMENT_RECOVERY[refusalCode] : null;
   const [result, setResult] = useState<PrismRunResult | null>(null);
 
   useEffect(() => {
@@ -472,12 +471,12 @@ export function PrismConsolePage() {
     if (!endpoint || missing.length > 0 || running) return;
     setRunning(true);
     setRunError(null);
-    setBillingBlocked(false);
+    setRefusalCode(null);
     setResult(null);
     try {
       setResult(await prismApi.run(endpoint.id, fieldValues));
     } catch (e) {
-      setBillingBlocked(e instanceof PrismRunError && e.status === 402);
+      setRefusalCode(e instanceof PrismRunError ? e.code : null);
       setRunError(
         e instanceof Error ? e.message : "Something went wrong. Try again.",
       );
@@ -774,9 +773,7 @@ export function PrismConsolePage() {
                   >
                     {runError}
                   </div>
-                  {billingBlocked ? (
-                    // A 402 is refused before any payment, so the honest note
-                    // is "nothing moved" plus a way to fix it.
+                  {recovery ? (
                     <div style={{ marginTop: 10 }}>
                       <div
                         style={{
@@ -785,14 +782,14 @@ export function PrismConsolePage() {
                           lineHeight: 1.55,
                         }}
                       >
-                        You were not charged. Add credit and run it again.
+                        {recovery.message}
                       </div>
                       <button
                         type="button"
-                        onClick={() => router.push("/billing")}
+                        onClick={() => router.push(recovery.href)}
                         style={{ ...ghostBtnSm, marginTop: 8 }}
                       >
-                        Add credits
+                        {recovery.label}
                       </button>
                     </div>
                   ) : (

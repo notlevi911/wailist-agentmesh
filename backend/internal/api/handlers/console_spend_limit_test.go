@@ -258,3 +258,58 @@ func TestRepoReviewSpendLimitRoute(t *testing.T) {
 		})
 	}
 }
+
+func TestConsolePaymentRefusalRecoveryRoutes(t *testing.T) {
+	for _, route := range []struct{ name, path, body, workflow string }{
+		{"prism", "/prism/run", `{"endpoint":"code-review-fast","fields":{"raw_url":{"kind":"text","value":"https://example.test/one.go"},"file_path":{"kind":"text","value":"one.go"}}}`, "Prism Console (managed, do not edit)"},
+		{"helixbox", "/helixbox/run", `{"endpoint":"cli-hour","fields":{"code":"test-session"}}`, "HelixBox Console (managed, do not edit)"},
+		{"repository", "/prism/repo/review", `{"repo":"example/project","ref":"main","paths":["one.go"]}`, "Prism Console (managed, do not edit)"},
+	} {
+		for _, code := range []string{"spending_limit", "insufficient_credits"} {
+			t.Run(route.name+"/"+code, func(t *testing.T) {
+				t.Setenv("WEB_READONLY_MODE", "false")
+				d := testDeps(t)
+				limit, balance := int64(50_000), int64(20_000_000)
+				if code == "insufficient_credits" {
+					limit, balance = 0, 0
+				}
+				owner := consoleTestAccount(t, d, limit, true)
+				if balance == 0 {
+					if err := d.Store.ReserveCredits(t.Context(), owner.ID, 20_000_000); err != nil {
+						t.Fatal(err)
+					}
+				}
+				s := stubConsolePayments(t, d, 100_000)
+				rec := settingsRequest(api.NewRouter(d), "POST", route.path, api.TestMakeToken(deletionSecret, owner.ID), route.body)
+				var response struct {
+					Code  string `json:"code"`
+					Error string `json:"error"`
+				}
+				if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil || rec.Code != 402 || response.Code != code || response.Error == "" {
+					t.Errorf("refusal status=%d body=%s err=%v, want code=%s", rec.Code, rec.Body, err, code)
+				}
+				if len(s.signer.calls) != 0 || s.payments.Load() != 0 || s.settlements.Load() != 0 {
+					t.Errorf("refusal signed or paid: signs=%d payments=%d settlements=%d", len(s.signer.calls), s.payments.Load(), s.settlements.Load())
+				}
+				if got, err := d.Store.GetCreditBalance(t.Context(), owner.ID); err != nil || got != balance {
+					t.Errorf("balance=%d want=%d err=%v", got, balance, err)
+				}
+				wf, found, err := d.Store.FindSystemWorkflow(t.Context(), owner.ID, route.workflow)
+				if err != nil || !found {
+					t.Fatalf("workflow found=%v err=%v", found, err)
+				}
+				runs, err := d.Store.ListWorkflowRuns(t.Context(), owner.ID, wf.ID, nil, 10)
+				if err != nil || len(runs) != 1 || runs[0].Status != models.RunStatusFailed {
+					t.Fatalf("runs=%v err=%v", runs, err)
+				}
+				rows, err := d.Store.ListDebitLedger(t.Context(), runs[0].ID)
+				if err != nil || len(rows) != 0 {
+					t.Errorf("refusal wrote charges: rows=%v err=%v", rows, err)
+				}
+				if route.name == "repository" && s.listings.Load() != 0 {
+					t.Error("rejected fee still fetched repository files")
+				}
+			})
+		}
+	}
+}

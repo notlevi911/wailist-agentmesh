@@ -3,7 +3,6 @@ package handlers
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"log"
 	"net/http"
@@ -11,7 +10,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/agentmesh/backend/internal/db"
 	"github.com/agentmesh/backend/internal/engine/nodes"
 	"github.com/agentmesh/backend/internal/models"
 	"github.com/agentmesh/backend/internal/prism"
@@ -264,13 +262,7 @@ func (d *Deps) PrismRepoReview(w http.ResponseWriter, r *http.Request) {
 	// every file paid for and then a failure to collect our own markup.
 	if err := ledger.Reserve(r.Context(), models.X402PlatformFeeUSDMicros); err != nil {
 		d.Store.FinishRun(context.WithoutCancel(r.Context()), run.ID, models.RunStatusFailed)
-		if errors.Is(err, errConsoleSpendLimit) {
-			respond.Error(w, http.StatusPaymentRequired, err.Error())
-			return
-		}
-		if errors.Is(err, db.ErrInsufficientCredits) {
-			respond.Error(w, http.StatusPaymentRequired,
-				"Not enough credit to start this review. Nothing was charged.")
+		if respondConsolePaymentRefusal(w, err) {
 			return
 		}
 		// Any other error here is a real infrastructure failure (DB down, tx
