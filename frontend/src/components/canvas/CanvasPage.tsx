@@ -1163,42 +1163,45 @@ export function CanvasPage({ workflowId }: CanvasPageProps) {
                     />
                   )}
                 </div>
-              ) : !fit.inspector ? (
-                // Mirror of the palette's rail.
-                <button
-                  type="button"
-                  onClick={() => {
-                    setInspectorCollapsed(false);
-                    setPrefer("inspector");
-                  }}
-                  className="am-studio-rail"
-                  data-side="right"
-                  title="Expand the chat panel"
-                  aria-label="Expand the chat panel"
-                  aria-expanded={false}
-                >
-                  ‹
-                </button>
               ) : (
                 <>
-                  <ResizeHandle
-                    side="right"
-                    value={inspectorW}
-                    min={INSPECTOR.min}
-                    max={INSPECTOR.max}
-                    ariaLabel="Resize chat panel"
-                    onChange={resizeInspector}
-                    onCommit={persistWidths}
-                    onReset={() => {
-                      desiredRef.current = {
-                        ...desiredRef.current,
-                        inspectorW: INSPECTOR.default,
-                      };
-                      setInspectorW(INSPECTOR.default);
-                      persistWidths();
-                    }}
-                  />
+                  {!fit.inspector && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setInspectorCollapsed(false);
+                        setPrefer("inspector");
+                      }}
+                      className="am-studio-rail"
+                      data-side="right"
+                      title="Expand the chat panel"
+                      aria-label="Expand the chat panel"
+                      aria-expanded={false}
+                    >
+                      ‹
+                    </button>
+                  )}
+                  {fit.inspector && (
+                    <ResizeHandle
+                      side="right"
+                      value={inspectorW}
+                      min={INSPECTOR.min}
+                      max={INSPECTOR.max}
+                      ariaLabel="Resize chat panel"
+                      onChange={resizeInspector}
+                      onCommit={persistWidths}
+                      onReset={() => {
+                        desiredRef.current = {
+                          ...desiredRef.current,
+                          inspectorW: INSPECTOR.default,
+                        };
+                        setInspectorW(INSPECTOR.default);
+                        persistWidths();
+                      }}
+                    />
+                  )}
                   <ChatRail
+                    hidden={!fit.inspector}
                     session={chat.session}
                     onSend={chat.handleSend}
                     busy={chat.busy}

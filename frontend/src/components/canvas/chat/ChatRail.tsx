@@ -19,6 +19,7 @@ interface ChatRailProps {
   busy: boolean;
   onShowLogs?: () => void;
   width?: number | string;
+  hidden?: boolean;
   // Build mode edits the graph instead of running the deployed agent.
   // canToggleBuildMode is false until the graph could run -- before that,
   // build mode is forced on and Run is not offered.
@@ -59,6 +60,7 @@ export function ChatRail({
   busy,
   onShowLogs,
   width = 320,
+  hidden = false,
   buildMode = false,
   canToggleBuildMode = false,
   onToggleBuildMode,
@@ -96,6 +98,7 @@ export function ChatRail({
   return (
     <div
       data-panel="chat"
+      hidden={hidden}
       style={{
         width,
         flexShrink: 0,
@@ -103,7 +106,7 @@ export function ChatRail({
         borderLeft: "1px solid var(--border)",
         background: "var(--bg-elev-1)",
         height: "100%",
-        display: "flex",
+        display: hidden ? "none" : "flex",
         flexDirection: "column",
       }}
     >
